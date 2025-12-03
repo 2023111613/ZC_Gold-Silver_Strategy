@@ -41,22 +41,32 @@ class Strategy_Engine:
 # --- 核心：读取数据的函数 ---
 @st.cache_data
 def load_data(code):
-    """
-    从 data 文件夹读取 CSV。
-    在云端部署时，Streamlit 会直接读取仓库里的 data 文件夹。
-    """
-    file_path = f"data/{code}.csv"
+    # --- 替换开始 ---
+    # 定义多种可能的路径，逐一尝试寻找文件
+    possible_paths = [
+        f"{code}.csv",              # 1. 就在当前代码同级目录下
+        f"../{code}.csv",           # 2. 在上一级目录 (根目录)
+        f"data/{code}.csv",         # 3. 在当前目录的data文件夹里
+        f"../data/{code}.csv"       # 4. 在上一级目录的data文件夹里
+    ]
+
+    csv_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            csv_path = path
+            break
     
-    if not os.path.exists(file_path):
-        st.error(f"未找到数据文件: {file_path}。请确认是否已同步到 GitHub。")
-        return pd.DataFrame()
+    if csv_path is None:
+        # 如果都找不到，打印出当前我们在哪里，方便调试
+        import os
+        st.error(f"❌ 无法找到 {code}.csv！")
+        st.warning(f"程序当前所在的文件夹是: {os.getcwd()}")
+        st.warning("请检查：CSV文件是否已上传到GitHub？名字是否完全一致？")
+        return
     
-    try:
-        df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
-        return df
-    except Exception as e:
-        st.error(f"读取数据出错: {e}")
-        return pd.DataFrame()
+    # 读取找到的文件
+    df_raw = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    # --- 替换结束 ---
 
 # --- 绘图函数 (保持不变) ---
 def plot_chart(df, code, strategy_name, line1_name, line2_name):
@@ -131,3 +141,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
