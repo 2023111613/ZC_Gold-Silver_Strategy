@@ -35,18 +35,8 @@ jobs:
     # 这样生成的 data 文件夹就会正确地留在 Strategy/data 里面
     - name: Run update script
       run: |
-        # 使用 find 命令查找 daily_update.py 并运行
-        # 这样无论它藏在第几层文件夹，都能被找到
-        SCRIPT_PATH=$(find . -name "daily_update.py")
-        if [ -z "$SCRIPT_PATH" ]; then
-          echo "❌ 错误：找不到 daily_update.py 文件！请检查文件名。"
-          exit 1
-        else
-          echo "✅ 找到文件：$SCRIPT_PATH，开始运行..."
-          # 进入该脚本所在的文件夹 (确保数据生成在正确位置)
-          cd $(dirname "$SCRIPT_PATH")
-          python $(basename "$SCRIPT_PATH")
-        fi
+        cd Strategy
+        python update_data.py   <-- 这里的名字必须和你的文件名一字不差！
 
 
 
