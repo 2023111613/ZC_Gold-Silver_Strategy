@@ -36,7 +36,7 @@ jobs:
     - name: Run update script
       run: |
         cd Strategy
-        python update_data.py   <-- 这里的名字必须和你的文件名一字不差！
+        python daily_update.py   <-- 这里的名字必须和你的文件名一字不差！
 
 
 
