@@ -1,60 +1,57 @@
-name: 自动更新数据
+name: 每日数据更新
 
-# 触发机制
 on:
-  # 1. 定时触发
   schedule:
-    # 国际标准时间 09:00 = 北京时间 下午 17:00 (收盘后)
+    # 每天北京时间 17:00 (UTC 09:00) 自动运行
     - cron: '0 9 * * *'
-  
-  # 2. 手动触发 (方便你在网页上点按钮测试)
-  workflow_dispatch:
+  workflow_dispatch: # 允许手动点击按钮运行
 
-# 赋予写权限，允许脚本修改仓库文件
 permissions:
   contents: write
 
 jobs:
-  build-and-update:
+  update-gold-data:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. 拉取你的代码仓库
+    # 1. 拉取代码
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 2. 安装 Python 环境
+    # 2. 设置 Python
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
 
-    # 3. 安装依赖库 (注意：这里没有 WindPy，只有 AkShare)
+    # 3. 安装依赖 (读取根目录的 requirements.txt)
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pandas akshare plotly streamlit
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    # 4. 运行更新数据的脚本
+    # 4. 运行脚本 (关键步骤！)
+    # 我们先进入 Strategy 文件夹，然后再运行 python 脚本
+    # 这样生成的 data 文件夹就会正确地留在 Strategy/data 里面
     - name: Run update script
       run: |
-        # 确保这里的文件名和你仓库里的 python 脚本文件名一致
-        python update_data.py
+        cd Strategy
+        python daily_update.py
 
-    # 5. 将新生成的 CSV 数据提交回仓库
+    # 5. 提交并推送
     - name: Commit and push changes
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
-        # 强制添加 data 文件夹下的所有文件
-        git add data/*
+        # 强制添加 Strategy/data 下的所有变动
+        git add Strategy/data/*.csv
         
-        # 检查是否有变化
+        # 检查状态并提交
         if [ -n "$(git status --porcelain)" ]; then
-          echo "发现数据更新，正在提交..."
+          echo "发现数据变化，正在提交..."
           git commit -m "Auto update data: $(date +'%Y-%m-%d')"
           git push
         else
-          echo "数据没有变化，跳过提交。"
+          echo "数据无变化，跳过提交。"
         fi
