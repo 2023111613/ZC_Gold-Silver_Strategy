@@ -35,7 +35,7 @@ jobs:
     # 这样生成的 data 文件夹就会正确地留在 Strategy/data 里面
     - name: Run update script
       run: |
-        # cd Strategy  <-- 删掉这一行
+        cd Strategy 
         python update_data.py
 
 
