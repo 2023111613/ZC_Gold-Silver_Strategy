@@ -35,8 +35,9 @@ jobs:
     # 这样生成的 data 文件夹就会正确地留在 Strategy/data 里面
     - name: Run update script
       run: |
-        cd Strategy 
-        python update_data.py
+        cd Strategy
+        python update_data.py  <-- 这里必须和Strategy文件夹里的文件名完全一致！
+
 
 
     # 5. 提交并推送
