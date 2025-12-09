@@ -121,27 +121,35 @@ class StrategyEngine:
         
         return df, df['kl_max'], df['kl_min']
 
-# --- 4. 绘图函数 ---
+# --- 4. 绘图函数 (修复版) ---
 def plot_chart(df, code, line1, line2, strategy_name):
     fig = go.Figure()
     
-    # K线数据 (为了简化，这里只画收盘价线，也可以改为蜡烛图)
-    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='收盘价', 
-                             line=dict(color='gray', width=1, opacity=0.6)))
+    # 修复点：opacity 应该放在 go.Scatter 里面，而不是 line=dict() 里面
+    fig.add_trace(go.Scatter(
+        x=df.index, 
+        y=df['Close'], 
+        name='收盘价', 
+        opacity=0.6,  # <--- 移到这里
+        line=dict(color='gray', width=1) # <--- 这里去掉 opacity
+    ))
     
     # 策略线 (均线 或 通道)
-    # 扶梯策略通常画阶梯状线，这里用 hv 形状模拟
     line_shape = 'hv' if "扶梯" in strategy_name else 'linear'
     
-    fig.add_trace(go.Scatter(x=df.index, y=line1, name='上轨', 
+    fig.add_trace(go.Scatter(x=df.index, y=line1, name='上轨/快线', 
                              line=dict(color='rgba(65, 105, 225, 0.8)', width=1.5, shape=line_shape)))
-    fig.add_trace(go.Scatter(x=df.index, y=line2, name='下轨', 
+    fig.add_trace(go.Scatter(x=df.index, y=line2, name='下轨/慢线', 
                              line=dict(color='rgba(255, 140, 0, 0.8)', width=1.5, shape=line_shape)))
     
     # 填充通道颜色 (仅扶梯策略)
     if "扶梯" in strategy_name:
-         fig.add_trace(go.Scatter(x=df.index, y=line1, fill=None, mode='lines', line_color='indigo', showlegend=False))
-         fig.add_trace(go.Scatter(x=df.index, y=line2, fill='tonexty', mode='lines', line_color='indigo', 
+         # fill=None 表示不填充，纯画线
+         fig.add_trace(go.Scatter(x=df.index, y=line1, fill=None, mode='lines', 
+                                  line=dict(color='indigo', width=0), showlegend=False))
+         # fill='tonexty' 填充到上一条线
+         fig.add_trace(go.Scatter(x=df.index, y=line2, fill='tonexty', mode='lines', 
+                                  line=dict(color='indigo', width=0), 
                                   fillcolor='rgba(200, 200, 255, 0.1)', showlegend=False))
 
     # 买卖点标记
@@ -153,15 +161,13 @@ def plot_chart(df, code, line1, line2, strategy_name):
     fig.add_trace(go.Scatter(x=sell.index, y=sell['Close'], mode='markers', 
                              marker=dict(symbol='triangle-down', size=12, color='green'), name='卖出信号'))
 
-    # 绘制盈亏连线 (仅当有成对交易时)
-    # 简单的逻辑：每次买入找最近的一次卖出连线
+    # 绘制盈亏连线
     for bd, brow in buy.iterrows():
         subsequent_sells = sell[sell.index > bd]
         if not subsequent_sells.empty:
             sd = subsequent_sells.index[0]
             sp = subsequent_sells.loc[sd]['Close']
             bp = brow['Close']
-            # 盈利红色，亏损绿色 (A股习惯)
             color = 'rgba(220,0,0,0.6)' if sp >= bp else 'rgba(0,128,0,0.6)'
             fig.add_trace(go.Scatter(x=[bd, sd], y=[bp, sp], mode='lines', 
                                      line=dict(color=color, width=2, dash='dot'), 
@@ -175,6 +181,7 @@ def plot_chart(df, code, line1, line2, strategy_name):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     return fig
+
 
 # --- 5. 主程序 ---
 def main():
@@ -263,3 +270,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
