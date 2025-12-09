@@ -10,12 +10,11 @@ st.set_page_config(page_title="金银走势追踪（^.^）", layout="wide")
 # --- 2. 核心功能：全盘搜索文件加载器 ---
 def load_csv_data(code):
     """
-    读取CSV并标准化列名，防止 'Close' 和 'close' 混用报错
+    读取CSV并标准化列名
     """
     target_filename = f"{code}.csv"
     found_path = None
     
-    # 常用路径预设
     quick_paths = [
         f"Strategy/data/{target_filename}", 
         f"data/{target_filename}",
@@ -27,7 +26,6 @@ def load_csv_data(code):
             found_path = path
             break
             
-    # 递归搜索
     if not found_path:
         current_dir = os.getcwd()
         for root, dirs, files in os.walk(current_dir):
@@ -38,7 +36,15 @@ def load_csv_data(code):
     if found_path:
         try:
             df = pd.read_csv(found_path, index_col=0, parse_dates=True)
-            # --- 数据清洗：统一列名为首字母大写 ---
+            df.columns = df.columns.str.strip().str.lower()
+            rename_map = {
+                'close': 'Close', 'last': 'Close', 'price': 'Close', '收盘': 'Close', '收盘价': 'Close',
+                'high': 'High', 'max': 'High', '最高': 'High', '最高价': 'High',
+                'low': 'Low', 'min': 'Low', '最低': 'Low', '最低价': 'Low',
+                'open': 'Open', '开盘': 'Open', '开盘价': 'Open',
+                'vol': 'Volume', 'volume': 'Volume', '成交量': 'Volume'
+            }
+            df.rename(columns=rename_map, inplace=True)
             df.columns = [c.capitalize() for c in df.columns]
             return df, found_path
         except Exception as e:
@@ -58,42 +64,32 @@ class StrategyEngine:
         df['Line_Fast'] = df['Close'].rolling(window=short_w).mean()
         df['Line_Slow'] = df['Close'].rolling(window=long_w).mean()
         
-        # 信号：快线 > 慢线 = 1 (多头), 否则 0 (空仓)
         df['Signal'] = np.where(df['Line_Fast'] > df['Line_Slow'], 1, 0)
-        df['Position'] = df['Signal'].diff() # 1:买入, -1:卖出
+        df['Position'] = df['Signal'].diff() 
         return df, df['Line_Fast'], df['Line_Slow']
 
     def run_escalator(self, short_w, long_w):
-        """
-        自动扶梯策略 (Escalator) - 基于之前的 Backtrader 逻辑复现
-        """
+        """自动扶梯策略"""
         df = self.df.copy()
         
-        # 1. 计算均线
+        required_cols = ['High', 'Low']
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            st.error(f"❌ 数据缺失：扶梯策略需要 {missing_cols} 列")
+            st.stop()
+        
         df['Line_Fast'] = df['Close'].rolling(window=short_w).mean()
         df['Line_Slow'] = df['Close'].rolling(window=long_w).mean()
         
-        # 2. 计算上轨(Max) 和 下轨(Min)
         df['kl_max'] = np.maximum(df['Line_Fast'], df['Line_Slow'])
         df['kl_min'] = np.minimum(df['Line_Fast'], df['Line_Slow'])
 
-        # 3. 计算 K 线相对位置指标 (K%)
-        # 公式: (Close - Low) / (High - Low)
-        # 注意：Shift(2) 对应 Backtrader 的前第2根
-        
-        # --- Current (Shift 2) ---
-        denom_cur = (df['High'].shift(2) - df['Low'].shift(2)).replace(0, np.nan) # 防除以0
+        denom_cur = (df['High'].shift(2) - df['Low'].shift(2)).replace(0, np.nan)
         df['kl_range_cur'] = (df['Close'].shift(2) - df['Low'].shift(2)) / denom_cur
         
-        # --- Previous (Shift 3) ---
-        denom_pre = (df['High'].shift(3) - df['Low'].shift(3)).replace(0, np.nan) # 防除以0
+        denom_pre = (df['High'].shift(3) - df['Low'].shift(3)).replace(0, np.nan)
         df['kl_range_pre'] = (df['Close'].shift(3) - df['Low'].shift(3)) / denom_pre
 
-        # 4. 信号生成逻辑 (参考 Backtrader)
-        # 逻辑：
-        # - 买入：收盘价站上最大均线 且 K线形态符合特定要求（前值小，现值大->转强）
-        # - 卖出：收盘价跌破最小均线 且 K线形态符合特定要求（前值大，现值小->转弱）
-        
         cond_buy = (
             (df['Close'] > df['kl_max']) & 
             (df['kl_range_pre'] <= 0.25) & 
@@ -106,79 +102,120 @@ class StrategyEngine:
             (df['kl_range_cur'] < 0.25)
         )
 
-        # 使用 np.select 构建状态机
-        # 1 = 持仓, 0 = 空仓/卖出, nan = 保持之前的状态
         conditions = [cond_buy, cond_sell]
         choices = [1, 0] 
         
         df['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
-        
-        # 向下填充 (ffill) 保持持仓状态，直到遇到明确的卖出信号
         df['Signal'] = df['Raw_Signal'].ffill().fillna(0)
-        
-        # 计算买卖点 diff: 1为买入, -1为卖出
         df['Position'] = df['Signal'].diff()
         
         return df, df['kl_max'], df['kl_min']
 
-# --- 4. 绘图函数 (修复版) ---
+# --- 4. 绘图函数 (视觉差异化升级版) ---
 def plot_chart(df, code, line1, line2, strategy_name):
     fig = go.Figure()
     
-    # 修复点：opacity 应该放在 go.Scatter 里面，而不是 line=dict() 里面
+    # 基础：绘制收盘价背景线
     fig.add_trace(go.Scatter(
         x=df.index, 
         y=df['Close'], 
         name='收盘价', 
-        opacity=0.6,  # <--- 移到这里
-        line=dict(color='gray', width=1) # <--- 这里去掉 opacity
+        opacity=0.5,
+        line=dict(color='gray', width=1)
     ))
     
-    # 策略线 (均线 或 通道)
-    line_shape = 'hv' if "扶梯" in strategy_name else 'linear'
+    # --- 🎨 核心差异化逻辑 ---
     
-    fig.add_trace(go.Scatter(x=df.index, y=line1, name='上轨/快线', 
-                             line=dict(color='rgba(65, 105, 225, 0.8)', width=1.5, shape=line_shape)))
-    fig.add_trace(go.Scatter(x=df.index, y=line2, name='下轨/慢线', 
-                             line=dict(color='rgba(255, 140, 0, 0.8)', width=1.5, shape=line_shape)))
-    
-    # 填充通道颜色 (仅扶梯策略)
     if "扶梯" in strategy_name:
-         # fill=None 表示不填充，纯画线
-         fig.add_trace(go.Scatter(x=df.index, y=line1, fill=None, mode='lines', 
-                                  line=dict(color='indigo', width=0), showlegend=False))
-         # fill='tonexty' 填充到上一条线
-         fig.add_trace(go.Scatter(x=df.index, y=line2, fill='tonexty', mode='lines', 
-                                  line=dict(color='indigo', width=0), 
-                                  fillcolor='rgba(200, 200, 255, 0.1)', showlegend=False))
+        # === 样式 B: 扶梯通道风格 ===
+        # 特点：阶梯状连线 (shape='hv') + 中间填充 (Band)
+        
+        # 1. 绘制下轨 (Min) - 无填充，纯线
+        fig.add_trace(go.Scatter(
+            x=df.index, y=line2, 
+            name='下轨 (Min)',
+            line=dict(color='rgba(100, 100, 100, 0)', width=0), # 隐藏线条本身，只为了做填充边界
+            showlegend=False
+        ))
+        
+        # 2. 绘制上轨 (Max) - 填充到下轨
+        fig.add_trace(go.Scatter(
+            x=df.index, y=line1, 
+            name='扶梯通道',
+            fill='tonexty', # 填充到上一条线 (即下轨)
+            fillcolor='rgba(83, 109, 254, 0.15)', # 淡淡的靛蓝色填充
+            line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'), # 阶梯线
+            mode='lines'
+        ))
+        
+        # 为了让下轨也显示出线条（刚才隐藏了），再画一次下轨的线
+        fig.add_trace(go.Scatter(
+            x=df.index, y=line2, 
+            name='下轨',
+            line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'),
+            showlegend=False
+        ))
+        
+    else:
+        # === 样式 A: 双均线交叉风格 ===
+        # 特点：平滑曲线 + 鲜明的双色对比
+        
+        fig.add_trace(go.Scatter(
+            x=df.index, y=line1, 
+            name='快线 (Fast)', 
+            line=dict(color='#2962FF', width=1.5) # 鲜艳蓝
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=df.index, y=line2, 
+            name='慢线 (Slow)', 
+            line=dict(color='#FF6D00', width=1.5) # 鲜艳橙
+        ))
 
-    # 买卖点标记
+    # --- 通用：买卖点标记 ---
     buy = df[df['Position'] == 1]
     sell = df[df['Position'] == -1]
 
-    fig.add_trace(go.Scatter(x=buy.index, y=buy['Close'], mode='markers', 
-                             marker=dict(symbol='triangle-up', size=12, color='red'), name='买入信号'))
-    fig.add_trace(go.Scatter(x=sell.index, y=sell['Close'], mode='markers', 
-                             marker=dict(symbol='triangle-down', size=12, color='green'), name='卖出信号'))
+    # 买入图标 (红色向上三角)
+    fig.add_trace(go.Scatter(
+        x=buy.index, y=buy['Close'], mode='markers', 
+        marker=dict(symbol='triangle-up', size=13, color='#D50000', line=dict(width=1, color='white')), 
+        name='买入'
+    ))
+    
+    # 卖出图标 (绿色向下三角)
+    fig.add_trace(go.Scatter(
+        x=sell.index, y=sell['Close'], mode='markers', 
+        marker=dict(symbol='triangle-down', size=13, color='#00C853', line=dict(width=1, color='white')), 
+        name='卖出'
+    ))
 
-    # 绘制盈亏连线
+    # --- 通用：盈亏连线 ---
+    # 连接每一次买入和它之后最近的一次卖出
     for bd, brow in buy.iterrows():
         subsequent_sells = sell[sell.index > bd]
         if not subsequent_sells.empty:
             sd = subsequent_sells.index[0]
             sp = subsequent_sells.loc[sd]['Close']
             bp = brow['Close']
-            color = 'rgba(220,0,0,0.6)' if sp >= bp else 'rgba(0,128,0,0.6)'
-            fig.add_trace(go.Scatter(x=[bd, sd], y=[bp, sp], mode='lines', 
-                                     line=dict(color=color, width=2, dash='dot'), 
-                                     showlegend=False, hoverinfo='skip'))
+            
+            # 盈利为红虚线，亏损为绿虚线
+            line_color = 'rgba(213, 0, 0, 0.6)' if sp >= bp else 'rgba(0, 200, 83, 0.6)'
+            
+            fig.add_trace(go.Scatter(
+                x=[bd, sd], y=[bp, sp], mode='lines', 
+                line=dict(color=line_color, width=2, dash='dot'), 
+                showlegend=False, hoverinfo='skip'
+            ))
 
     fig.update_layout(
-        title=f"{code} - {strategy_name}", 
+        title=dict(text=f"{code} - {strategy_name}", font=dict(size=20)),
         height=600, 
         template="plotly_white", 
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(showgrid=False), # 去掉X轴网格让图更清爽
+        yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
     )
     return fig
 
@@ -189,8 +226,19 @@ def main():
     
     st.sidebar.header("⚙️ 策略配置")
     
-    # 允许用户手动输入文件名，也可以选择预设
-    target_code = st.sidebar.text_input("输入标的代码 (如 AU.SHF)", value="AU.SHF")
+    # 资产选择配置
+    ASSET_OPTIONS = {
+        'AU.SHF': '黄金期货主力 (AU.SHF)',
+        'AG.SHF': '白银期货主力 (AG.SHF)',
+        'Au9999.SGE': '黄金现货9999 (Au9999.SGE)'
+    }
+    
+    target_code = st.sidebar.selectbox(
+        "选择交易标的", 
+        options=list(ASSET_OPTIONS.keys()),
+        format_func=lambda x: ASSET_OPTIONS[x],
+        index=0
+    )
     
     strategy_type = st.sidebar.radio("选择策略模型", ["双均线策略 (Double MA)", "自动扶梯策略 (Escalator)"])
 
@@ -199,49 +247,44 @@ def main():
 
     if df_raw.empty:
         st.error(f"❌ 无法找到文件: {target_code}.csv")
-        st.info("请确保CSV文件在当前目录或 'data' 文件夹下。")
+        st.info("请运行 update_data.py 更新数据，或确保文件在 data 目录下。")
         return
     else:
-        st.success(f"已加载: {os.path.basename(loaded_path)} ({len(df_raw)} 条记录)")
+        display_name = ASSET_OPTIONS.get(target_code, target_code)
+        st.success(f"已加载: {display_name} ({len(df_raw)} 条记录)")
 
     # 运行策略
     engine = StrategyEngine(df_raw)
     
     if "双均线" in strategy_type:
         st.sidebar.subheader("均线参数")
-        short_w = st.sidebar.number_input("短周期 (Fast)", 5, 100, 10)
-        long_w = st.sidebar.number_input("长周期 (Slow)", 20, 300, 50)
+        short_w = st.sidebar.number_input("快线周期", 5, 100, 10)
+        long_w = st.sidebar.number_input("慢线周期", 20, 300, 50)
         df_res, l1, l2 = engine.run_double_ma(short_w, long_w)
     else:
-        st.sidebar.subheader("扶梯参数")
-        # 修正：这里需要两个参数对应 Backtrader 的 ma_slow 和 ma_fast
-        fast_w = st.sidebar.number_input("均线1 (Fast)", 2, 100, 10)
-        slow_w = st.sidebar.number_input("均线2 (Slow)", 10, 300, 50)
+        st.sidebar.subheader("通道参数")
+        fast_w = st.sidebar.number_input("基准均线1", 2, 100, 10)
+        slow_w = st.sidebar.number_input("基准均线2", 10, 300, 50)
         df_res, l1, l2 = engine.run_escalator(fast_w, slow_w)
     
     # --- 结果展示区 ---
     last_row = df_res.iloc[-1]
     last_date = df_res.index[-1].strftime('%Y-%m-%d')
-    
-    # 状态判断
     current_pos = last_row['Signal']
-    status_text = "持仓" if current_pos == 1 else "空仓 "
-    status_color = "normal" if current_pos == 0 else "inverse"
-
-    # 指标卡片
+    
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("数据日期", last_date)
     c2.metric("最新收盘", f"{last_row['Close']:.2f}")
-    c3.metric("当前状态", status_text)
+    c3.metric("当前状态", "持仓 (多头)" if current_pos == 1 else "空仓 (观望)", 
+              delta="BULL" if current_pos==1 else "FLAT", delta_color="normal")
     
-    # 计算最近一次操作后的收益
+    # 收益计算
     last_signal_idx = df_res[df_res['Position'] != 0].index
     if not last_signal_idx.empty:
         last_op_date = last_signal_idx[-1]
         last_op_price = df_res.loc[last_op_date]['Close']
         last_op_type = "买入" if df_res.loc[last_op_date]['Position'] == 1 else "卖出"
         
-        # 如果当前是持仓状态，计算浮动盈亏
         if current_pos == 1:
             pnl = (last_row['Close'] - last_op_price) / last_op_price * 100
             c4.metric(f"自 {last_op_date.strftime('%m-%d')} {last_op_type}", f"{pnl:.2f}%", delta=f"{pnl:.2f}%")
@@ -251,36 +294,23 @@ def main():
     # 绘图
     st.plotly_chart(plot_chart(df_res, target_code, l1, l2, strategy_type), use_container_width=True)
     
-
+    # 信号表
     with st.expander("📊 查看详细信号记录"):
-        # 筛选有动作的行
         signals = df_res[df_res['Position'] != 0].copy()
-        
         if not signals.empty:
             signals['操作'] = signals['Position'].map({1: '🔺 买入', -1: '🔻 卖出'})
             
-            # 根据策略类型决定显示的列
             if "扶梯" in strategy_type:
                 cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_cur']
             else:
                 cols_to_show = ['Close', '操作', 'Line_Fast', 'Line_Slow']
             
-            # 准备显示的数据
             df_display = signals[cols_to_show].sort_index(ascending=False)
-            
-            # --- 修复核心：只格式化数值列 ---
-            # 动态生成格式化字典：除了 '操作' 列，其他都保留2位小数
             format_dict = {col: "{:.2f}" for col in cols_to_show if col != '操作'}
             
-            st.dataframe(
-                df_display.style.format(format_dict), # <--- 这里改成了传入字典
-                use_container_width=True
-            )
+            st.dataframe(df_display.style.format(format_dict), use_container_width=True)
         else:
             st.write("当前区间内无交易信号")
 
-
 if __name__ == "__main__":
     main()
-
-
