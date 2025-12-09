@@ -8,7 +8,7 @@ from datetime import datetime
 CODE_MAP = {
     'AU.SHF': 'au0',       # 上海黄金期货主力连续
     'AG.SHF': 'ag0',       # 上海白银期货主力连续
-    'Au9999.SGE': '黄金9999' # 上海黄金交易所现货
+    'Au9999.SGE': 'Au99.99' # 上海黄金交易所现货
 }
 
 DATA_DIR = "data"
@@ -123,3 +123,4 @@ def update_data_akshare():
 if __name__ == "__main__":
     # 确保安装了 akshare: pip install akshare --upgrade
     update_data_akshare()
+
