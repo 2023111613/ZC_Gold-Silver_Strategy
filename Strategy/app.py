@@ -251,23 +251,36 @@ def main():
     # 绘图
     st.plotly_chart(plot_chart(df_res, target_code, l1, l2, strategy_type), use_container_width=True)
     
-    # 详细数据表
+
     with st.expander("📊 查看详细信号记录"):
         # 筛选有动作的行
         signals = df_res[df_res['Position'] != 0].copy()
+        
         if not signals.empty:
             signals['操作'] = signals['Position'].map({1: '🔺 买入', -1: '🔻 卖出'})
-            cols_to_show = ['Close', '操作', 'Line_Fast', 'Line_Slow']
+            
+            # 根据策略类型决定显示的列
             if "扶梯" in strategy_type:
                 cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_cur']
+            else:
+                cols_to_show = ['Close', '操作', 'Line_Fast', 'Line_Slow']
+            
+            # 准备显示的数据
+            df_display = signals[cols_to_show].sort_index(ascending=False)
+            
+            # --- 修复核心：只格式化数值列 ---
+            # 动态生成格式化字典：除了 '操作' 列，其他都保留2位小数
+            format_dict = {col: "{:.2f}" for col in cols_to_show if col != '操作'}
             
             st.dataframe(
-                signals[cols_to_show].sort_index(ascending=False).style.format("{:.2f}"),
+                df_display.style.format(format_dict), # <--- 这里改成了传入字典
                 use_container_width=True
             )
         else:
             st.write("当前区间内无交易信号")
 
+
 if __name__ == "__main__":
     main()
+
 
