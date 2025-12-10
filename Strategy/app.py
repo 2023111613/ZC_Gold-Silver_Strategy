@@ -84,11 +84,11 @@ class StrategyEngine:
         df['kl_max'] = np.maximum(df['Line_Fast'], df['Line_Slow'])
         df['kl_min'] = np.minimum(df['Line_Fast'], df['Line_Slow'])
 
-        denom_cur = (df['High'].shift(2) - df['Low'].shift(2)).replace(0, np.nan)
-        df['kl_range_cur'] = (df['Close'].shift(2) - df['Low'].shift(2)) / denom_cur
+        denom_cur = (df['High'].shift(1) - df['Low'].shift(1)).replace(0, np.nan)
+        df['kl_range_cur'] = (df['Close'].shift(1) - df['Low'].shift(1)) / denom_cur
         
-        denom_pre = (df['High'].shift(3) - df['Low'].shift(3)).replace(0, np.nan)
-        df['kl_range_pre'] = (df['Close'].shift(3) - df['Low'].shift(3)) / denom_pre
+        denom_pre = (df['High'].shift(2) - df['Low'].shift(3)).replace(0, np.nan)
+        df['kl_range_pre'] = (df['Close'].shift(2) - df['Low'].shift(2)) / denom_pre
 
         cond_buy = (
             (df['Close'] > df['kl_max']) & 
@@ -303,6 +303,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
