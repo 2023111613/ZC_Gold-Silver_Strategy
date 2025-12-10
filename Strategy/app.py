@@ -117,91 +117,77 @@ def plot_chart(df, code, line1, line2, strategy_name):
     
     # 基础：绘制收盘价背景线
     fig.add_trace(go.Scatter(
-        x=df.index, 
-        y=df['Close'], 
-        name='收盘价', 
-        opacity=0.5,
-        line=dict(color='gray', width=1)
+        x=df.index, y=df['Close'], name='收盘价', 
+        opacity=0.5, line=dict(color='gray', width=1)
     ))
     
-    # --- 🎨 核心差异化逻辑 ---
-    
     if "扶梯" in strategy_name:
-        # === 样式 B: 扶梯通道风格 ===
-        # 特点：阶梯状连线 (shape='hv') + 中间填充 (Band)
+        # === 样式 B: 扶梯通道风格 (命名优化版) ===
         
-        # 1. 绘制下轨 (Min) - 无填充，纯线
+        # 1. 绘制下轨 (Min) - 仅仅作为边界
         fig.add_trace(go.Scatter(
             x=df.index, y=line2, 
-            name='下轨 (Min)',
-            line=dict(color='rgba(100, 100, 100, 0)', width=0), # 隐藏线条本身，只为了做填充边界
+            name='通道下沿 (支撑)', # 改名
+            line=dict(color='rgba(100, 100, 100, 0)', width=0),
             showlegend=False
         ))
         
-        # 2. 绘制上轨 (Max) - 填充到下轨
+        # 2. 绘制上轨 (Max) - 并填充颜色
         fig.add_trace(go.Scatter(
             x=df.index, y=line1, 
-            name='扶梯通道',
-            fill='tonexty', # 填充到上一条线 (即下轨)
-            fillcolor='rgba(83, 109, 254, 0.15)', # 淡淡的靛蓝色填充
-            line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'), # 阶梯线
+            name='扶梯震荡区', # 改名：明确这是中间区域
+            fill='tonexty', 
+            fillcolor='rgba(83, 109, 254, 0.15)',
+            line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'),
             mode='lines'
         ))
         
-        # 为了让下轨也显示出线条（刚才隐藏了），再画一次下轨的线
+        # 3. 单独显式画出上沿和下沿的线，方便看清楚边界
+        fig.add_trace(go.Scatter(
+            x=df.index, y=line1, 
+            name='通道上沿 (突破线)', # 改名：明确突破这里买入
+            line=dict(color='#2962FF', width=1.5, shape='hv'), # 深蓝色
+            showlegend=True
+        ))
+        
         fig.add_trace(go.Scatter(
             x=df.index, y=line2, 
-            name='下轨',
-            line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'),
-            showlegend=False
+            name='通道下沿 (止损线)', # 改名：明确跌破这里卖出
+            line=dict(color='#00B0FF', width=1.5, shape='hv'), # 浅蓝色
+            showlegend=True
         ))
         
     else:
-        # === 样式 A: 双均线交叉风格 ===
-        # 特点：平滑曲线 + 鲜明的双色对比
-        
-        fig.add_trace(go.Scatter(
-            x=df.index, y=line1, 
-            name=' 快平均移动线', 
-            line=dict(color='#2962FF', width=1.5) # 鲜艳蓝
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=df.index, y=line2, 
-            name='慢平均移动线 ', 
-            line=dict(color='#FF6D00', width=1.5) # 鲜艳橙
-        ))
+        # ... 双均线逻辑保持不变 ...
+        fig.add_trace(go.Scatter(x=df.index, y=line1, name='快线 (短期趋势)', line=dict(color='#2962FF', width=1.5)))
+        fig.add_trace(go.Scatter(x=df.index, y=line2, name='慢线 (长期趋势)', line=dict(color='#FF6D00', width=1.5)))
 
-    # --- 通用：买卖点标记 ---
+    # ... 后面绘制买卖点和盈亏线的逻辑保持不变 ...
+    
+    # (省略后续代码，直接复制之前的即可)
     buy = df[df['Position'] == 1]
     sell = df[df['Position'] == -1]
-
-    # 买入图标 (红色向上三角)
+    
     fig.add_trace(go.Scatter(
         x=buy.index, y=buy['Close'], mode='markers', 
         marker=dict(symbol='triangle-up', size=13, color='#D50000', line=dict(width=1, color='white')), 
-        name='买入'
+        name='买入信号'
     ))
     
-    # 卖出图标 (绿色向下三角)
     fig.add_trace(go.Scatter(
         x=sell.index, y=sell['Close'], mode='markers', 
         marker=dict(symbol='triangle-down', size=13, color='#00C853', line=dict(width=1, color='white')), 
-        name='卖出'
+        name='卖出信号'
     ))
 
-    # --- 通用：盈亏连线 ---
-    # 连接每一次买入和它之后最近的一次卖出
+    # ... 盈亏连线代码保持不变 ...
     for bd, brow in buy.iterrows():
         subsequent_sells = sell[sell.index > bd]
         if not subsequent_sells.empty:
             sd = subsequent_sells.index[0]
             sp = subsequent_sells.loc[sd]['Close']
             bp = brow['Close']
-            
-            # 盈利为红虚线，亏损为绿虚线
             line_color = 'rgba(213, 0, 0, 0.6)' if sp >= bp else 'rgba(0, 200, 83, 0.6)'
-            
             fig.add_trace(go.Scatter(
                 x=[bd, sd], y=[bp, sp], mode='lines', 
                 line=dict(color=line_color, width=2, dash='dot'), 
@@ -210,12 +196,9 @@ def plot_chart(df, code, line1, line2, strategy_name):
 
     fig.update_layout(
         title=dict(text=f"{code} - {strategy_name}", font=dict(size=20)),
-        height=600, 
-        template="plotly_white", 
-        hovermode="x unified",
+        height=600, template="plotly_white", hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(showgrid=False), # 去掉X轴网格让图更清爽
-        yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
     )
     return fig
 
@@ -256,16 +239,22 @@ def main():
     # 运行策略
     engine = StrategyEngine(df_raw)
     
+
+
     if "双均线" in strategy_type:
-        st.sidebar.subheader("均线参数")
-        short_w = st.sidebar.number_input("快线周期", 5, 100, 10)
-        long_w = st.sidebar.number_input("慢线周期", 20, 300, 50)
+        st.sidebar.subheader("均线交叉参数")
+        short_w = st.sidebar.number_input("快线周期 (短期趋势)", 5, 100, 10, help="例如：10日均线，反应灵敏")
+        long_w = st.sidebar.number_input("慢线周期 (长期趋势)", 20, 300, 50, help="例如：50日均线，反应迟钝")
         df_res, l1, l2 = engine.run_double_ma(short_w, long_w)
     else:
-        st.sidebar.subheader("通道参数")
-        fast_w = st.sidebar.number_input("基准均线1", 2, 100, 10)
-        slow_w = st.sidebar.number_input("基准均线2", 10, 300, 50)
+        st.sidebar.subheader("扶梯通道参数")
+        # --- 修改点：名字更加具体 ---
+        fast_w = st.sidebar.number_input("通道快线周期 (收窄通道)", 2, 100, 10, help="决定通道对价格波动的敏感度，周期越短通道越贴近价格")
+        slow_w = st.sidebar.number_input("通道慢线周期 (定宽通道)", 10, 300, 50, help="决定通道的基础宽幅，周期越长通道越宽")
         df_res, l1, l2 = engine.run_escalator(fast_w, slow_w)
+
+# ... 保持下面不变 ...
+
     
     # --- 结果展示区 ---
     last_row = df_res.iloc[-1]
@@ -314,4 +303,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
