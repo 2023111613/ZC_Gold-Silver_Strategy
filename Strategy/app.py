@@ -290,7 +290,7 @@ def main():
             signals['操作'] = signals['Position'].map({1: '🔺 买入', -1: '🔻 卖出'})
             
             if "扶梯" in strategy_type:
-                cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_pre','kl_range_cur']
+                cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_cur','kl_range_pre']
             else:
                 cols_to_show = ['Close', '操作', 'Line_Fast', 'Line_Slow']
             
@@ -303,6 +303,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
