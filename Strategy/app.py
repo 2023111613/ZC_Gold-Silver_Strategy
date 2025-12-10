@@ -87,7 +87,7 @@ class StrategyEngine:
         denom_cur = (df['High'].shift(1) - df['Low'].shift(1)).replace(0, np.nan)
         df['kl_range_cur'] = (df['Close'].shift(1) - df['Low'].shift(1)) / denom_cur
         
-        denom_pre = (df['High'].shift(2) - df['Low'].shift(3)).replace(0, np.nan)
+        denom_pre = (df['High'].shift(2) - df['Low'].shift(2)).replace(0, np.nan)
         df['kl_range_pre'] = (df['Close'].shift(2) - df['Low'].shift(2)) / denom_pre
 
         cond_buy = (
@@ -303,6 +303,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
