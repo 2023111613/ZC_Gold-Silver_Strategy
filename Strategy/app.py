@@ -242,15 +242,15 @@ def main():
 
 
     if "双均线" in strategy_type:
-        st.sidebar.subheader("均线交叉参数")
+        st.sidebar.subheader("双均线参数")
         short_w = st.sidebar.number_input("快线周期 (短期趋势)", 5, 100, 10, help="例如：10日均线，反应灵敏")
         long_w = st.sidebar.number_input("慢线周期 (长期趋势)", 20, 300, 50, help="例如：50日均线，反应迟钝")
         df_res, l1, l2 = engine.run_double_ma(short_w, long_w)
     else:
-        st.sidebar.subheader("扶梯通道参数")
+        st.sidebar.subheader("自动扶梯参数")
         # --- 修改点：名字更加具体 ---
-        fast_w = st.sidebar.number_input("通道快线周期 (收窄通道)", 2, 100, 10, help="决定通道对价格波动的敏感度，周期越短通道越贴近价格")
-        slow_w = st.sidebar.number_input("通道慢线周期 (定宽通道)", 10, 300, 50, help="决定通道的基础宽幅，周期越长通道越宽")
+        fast_w = st.sidebar.number_input("快线周期 ", 2, 100, 10, help="决定通道对价格波动的敏感度，周期越短通道越贴近价格")
+        slow_w = st.sidebar.number_input("慢线周期 ", 10, 300, 50, help="决定通道的基础宽幅，周期越长通道越宽")
         df_res, l1, l2 = engine.run_escalator(fast_w, slow_w)
 
 # ... 保持下面不变 ...
@@ -303,5 +303,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
