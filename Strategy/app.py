@@ -127,7 +127,7 @@ def plot_chart(df, code, line1, line2, strategy_name):
         # 1. 绘制下轨 (Min) - 仅仅作为边界
         fig.add_trace(go.Scatter(
             x=df.index, y=line2, 
-            name='通道下沿 (支撑)', # 改名
+            name='扶梯通道下沿 ', # 改名
             line=dict(color='rgba(100, 100, 100, 0)', width=0),
             showlegend=False
         ))
@@ -135,7 +135,7 @@ def plot_chart(df, code, line1, line2, strategy_name):
         # 2. 绘制上轨 (Max) - 并填充颜色
         fig.add_trace(go.Scatter(
             x=df.index, y=line1, 
-            name='扶梯震荡区', # 改名：明确这是中间区域
+            name='扶梯中间区', # 改名：明确这是中间区域
             fill='tonexty', 
             fillcolor='rgba(83, 109, 254, 0.15)',
             line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'),
@@ -145,14 +145,14 @@ def plot_chart(df, code, line1, line2, strategy_name):
         # 3. 单独显式画出上沿和下沿的线，方便看清楚边界
         fig.add_trace(go.Scatter(
             x=df.index, y=line1, 
-            name='通道上沿 (突破线)', # 改名：明确突破这里买入
+            name='扶梯通道上沿 ', # 改名：明确突破这里买入
             line=dict(color='#2962FF', width=1.5, shape='hv'), # 深蓝色
             showlegend=True
         ))
         
         fig.add_trace(go.Scatter(
             x=df.index, y=line2, 
-            name='通道下沿 (止损线)', # 改名：明确跌破这里卖出
+            name='扶梯通道下沿 ', # 改名：明确跌破这里卖出
             line=dict(color='#00B0FF', width=1.5, shape='hv'), # 浅蓝色
             showlegend=True
         ))
@@ -290,7 +290,7 @@ def main():
             signals['操作'] = signals['Position'].map({1: '🔺 买入', -1: '🔻 卖出'})
             
             if "扶梯" in strategy_type:
-                cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_cur']
+                cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_pre','kl_range_cur']
             else:
                 cols_to_show = ['Close', '操作', 'Line_Fast', 'Line_Slow']
             
@@ -303,6 +303,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
