@@ -162,13 +162,13 @@ def plot_chart(df, code, line1, line2, strategy_name):
         
         fig.add_trace(go.Scatter(
             x=df.index, y=line1, 
-            name='快线 (Fast)', 
+            name=' 快平均移动线', 
             line=dict(color='#2962FF', width=1.5) # 鲜艳蓝
         ))
         
         fig.add_trace(go.Scatter(
             x=df.index, y=line2, 
-            name='慢线 (Slow)', 
+            name='慢平均移动线 ', 
             line=dict(color='#FF6D00', width=1.5) # 鲜艳橙
         ))
 
@@ -314,3 +314,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
