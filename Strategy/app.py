@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. 页面基础配置 ---
-st.set_page_config(page_title="金银走势追踪 Pro", layout="wide")
+st.set_page_config(page_title="金银走势追踪", layout="wide")
 
 # 初始化 session_state 用于存储优化后的参数
 if 'opt_short' not in st.session_state:
@@ -134,7 +134,7 @@ class StrategyEngine:
         
         return df, df['kl_max'], df['kl_min']
 
-# --- 4. 优化器 (后台计算) ---
+# --- 优化部分 ---
 def optimize_parameters(df, strategy_func):
     """
     网格搜索：寻找产生交易信号次数最多的参数组合
@@ -159,9 +159,7 @@ def optimize_parameters(df, strategy_func):
         for l_w in longs:
             # 运行策略
             res_df, _, _ = strategy_func(s_w, l_w)
-            
-            # 统计信号数量 (非0的Position数量)
-            # 注意：这里我们只要交易次数多（敏感度高），不考虑盈亏
+
             if 'Position' in res_df.columns:
                 signal_count = len(res_df[res_df['Position'] != 0])
                 
@@ -232,10 +230,10 @@ def plot_chart(df, code, line1, line2, strategy_name, period_tag):
 
 # --- 6. 主程序 ---
 def main():
-    st.title("📈 ZC_金银趋势追踪 Pro")
+    st.title("📈ZC_金银趋势追踪")
     
     # --- 侧边栏配置 ---
-    st.sidebar.header("🛠️ 全局设置")
+    st.sidebar.header("全局设置")
     
     # 1. 标的选择
     ASSET_OPTIONS = {
@@ -250,7 +248,7 @@ def main():
     
     # 2. 周期切换 (日线/周线)
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📅 周期选择")
+    st.sidebar.subheader("周期选择")
     period_mode = st.sidebar.radio(
         "K线周期", 
         ["日线 (Daily)", "周线 (Weekly)"], 
@@ -289,7 +287,7 @@ def main():
     
     col_opt1, col_opt2 = st.sidebar.columns([3, 1])
     with col_opt1:
-        st.info("💡 寻找信号最密集的参数组合")
+        st.info("💡点击计算交易频率最多参数")
     with col_opt2:
         if st.button("🔍"):
             best_p, best_c = optimize_parameters(df_active, current_strat_func)
@@ -322,7 +320,7 @@ def main():
     c2.metric("最新价格", f"{last_row['Close']:.2f}")
     
     pos_val = last_row['Signal']
-    state_text = "🔴 多头持仓" if pos_val == 1 else "⚪ 空仓观望"
+    state_text = "多头持仓" if pos_val == 1 else "空头观望"
     c3.metric("当前信号", state_text)
     
     c4.metric("区间信号总数", f"{total_signals} 次", help="该参数组合下的买卖操作总次数")
@@ -345,3 +343,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
