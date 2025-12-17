@@ -5,27 +5,28 @@ import plotly.graph_objects as go
 import os
 
 # --- 1. 页面基础配置 ---
-st.set_page_config(page_title="金银走势追踪（^.^）", layout="wide")
+st.set_page_config(page_title="金银走势追踪 Pro", layout="wide")
 
-# --- 2. 核心功能：全盘搜索文件加载器 ---
+# 初始化 session_state 用于存储优化后的参数
+if 'opt_short' not in st.session_state:
+    st.session_state.opt_short = None
+if 'opt_long' not in st.session_state:
+    st.session_state.opt_long = None
+
+# --- 2. 核心功能：数据加载与重采样 ---
 def load_csv_data(code):
-    """
-    读取CSV并标准化列名
-    """
+    """读取CSV并标准化列名"""
     target_filename = f"{code}.csv"
     found_path = None
     
-    quick_paths = [
-        f"Strategy/data/{target_filename}", 
-        f"data/{target_filename}",
-        f"{target_filename}"
-    ]
-    
+    # 常用路径搜索
+    quick_paths = [f"Strategy/data/{target_filename}", f"data/{target_filename}", f"{target_filename}"]
     for path in quick_paths:
         if os.path.exists(path):
             found_path = path
             break
             
+    # 全盘搜索（如果没有找到）
     if not found_path:
         current_dir = os.getcwd()
         for root, dirs, files in os.walk(current_dir):
@@ -38,20 +39,44 @@ def load_csv_data(code):
             df = pd.read_csv(found_path, index_col=0, parse_dates=True)
             df.columns = df.columns.str.strip().str.lower()
             rename_map = {
-                'close': 'Close', 'last': 'Close', 'price': 'Close', '收盘': 'Close', '收盘价': 'Close',
-                'high': 'High', 'max': 'High', '最高': 'High', '最高价': 'High',
-                'low': 'Low', 'min': 'Low', '最低': 'Low', '最低价': 'Low',
-                'open': 'Open', '开盘': 'Open', '开盘价': 'Open',
-                'vol': 'Volume', 'volume': 'Volume', '成交量': 'Volume'
+                'close': 'Close', 'last': 'Close', 'price': 'Close',
+                'high': 'High', 'max': 'High',
+                'low': 'Low', 'min': 'Low',
+                'open': 'Open',
+                'vol': 'Volume', 'volume': 'Volume'
             }
             df.rename(columns=rename_map, inplace=True)
             df.columns = [c.capitalize() for c in df.columns]
+            # 确保索引排序
+            df = df.sort_index()
             return df, found_path
         except Exception as e:
             st.error(f"读取报错: {e}")
             return pd.DataFrame(), None
     else:
         return pd.DataFrame(), None
+
+def resample_data(df, period_type):
+    """
+    将日线数据转换为周线数据
+    period_type: 'D' (Daily) or 'W' (Weekly)
+    """
+    if df.empty or period_type == 'D':
+        return df
+    
+    # 定义聚合逻辑
+    agg_dict = {
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last'
+    }
+    if 'Volume' in df.columns:
+        agg_dict['Volume'] = 'sum'
+        
+    # 重采样并去除空值
+    df_resampled = df.resample('W-FRI').agg(agg_dict).dropna()
+    return df_resampled
 
 # --- 3. 策略逻辑引擎 ---
 class StrategyEngine:
@@ -72,11 +97,9 @@ class StrategyEngine:
         """自动扶梯策略"""
         df = self.df.copy()
         
-        required_cols = ['High', 'Low']
-        missing_cols = [c for c in required_cols if c not in df.columns]
-        if missing_cols:
-            st.error(f"❌ 数据缺失：扶梯策略需要 {missing_cols} 列")
-            st.stop()
+        # 简单校验
+        if 'High' not in df.columns or 'Low' not in df.columns:
+            return df, pd.Series(), pd.Series()
         
         df['Line_Fast'] = df['Close'].rolling(window=short_w).mean()
         df['Line_Slow'] = df['Close'].rolling(window=long_w).mean()
@@ -111,202 +134,214 @@ class StrategyEngine:
         
         return df, df['kl_max'], df['kl_min']
 
-# --- 4. 绘图函数 (视觉差异化升级版) ---
-def plot_chart(df, code, line1, line2, strategy_name):
+# --- 4. 优化器 (后台计算) ---
+def optimize_parameters(df, strategy_func):
+    """
+    网格搜索：寻找产生交易信号次数最多的参数组合
+    """
+    best_count = -1
+    best_params = (10, 50) # 默认
+    
+    # 定义搜索空间 (为了速度，步长设为稍大)
+    # 快线: 3 ~ 30
+    # 慢线: 10 ~ 100
+    
+    shorts = range(3, 35, 2)
+    
+    # 进度条
+    progress_text = "正在后台暴力计算最佳波段参数..."
+    my_bar = st.sidebar.progress(0, text=progress_text)
+    total_iters = len(shorts)
+    
+    for i, s_w in enumerate(shorts):
+        # 慢线必须大于快线
+        longs = range(s_w + 5, 100, 5)
+        for l_w in longs:
+            # 运行策略
+            res_df, _, _ = strategy_func(s_w, l_w)
+            
+            # 统计信号数量 (非0的Position数量)
+            # 注意：这里我们只要交易次数多（敏感度高），不考虑盈亏
+            if 'Position' in res_df.columns:
+                signal_count = len(res_df[res_df['Position'] != 0])
+                
+                # 更新最佳结果
+                if signal_count > best_count:
+                    best_count = signal_count
+                    best_params = (s_w, l_w)
+                    
+        my_bar.progress((i + 1) / total_iters, text=progress_text)
+        
+    my_bar.empty()
+    return best_params, best_count
+
+# --- 5. 绘图函数 ---
+def plot_chart(df, code, line1, line2, strategy_name, period_tag):
     fig = go.Figure()
     
-    # 基础：绘制收盘价背景线
+    # 标题增加周期标识
+    title_text = f"{code} [{period_tag}] - {strategy_name}"
+    
+    # 绘制K线 (如果需要更专业的图，可以用 go.Candlestick，这里为了保持风格统一用 Line + Fill)
+    # 但由于有周线，建议如果数据量不大，画蜡烛图更清晰，这里保持原逻辑的基础做微调
     fig.add_trace(go.Scatter(
         x=df.index, y=df['Close'], name='收盘价', 
-        opacity=0.5, line=dict(color='gray', width=1)
+        opacity=0.6, line=dict(color='gray', width=1)
     ))
     
     if "扶梯" in strategy_name:
-        # === 样式 B: 扶梯通道风格 (命名优化版) ===
-        
-        # 1. 绘制下轨 (Min) - 仅仅作为边界
+        # 扶梯通道绘制
         fig.add_trace(go.Scatter(
-            x=df.index, y=line2, 
-            name='扶梯通道下沿 ', # 改名
-            line=dict(color='rgba(100, 100, 100, 0)', width=0),
-            showlegend=False
+            x=df.index, y=line1, name='通道上沿', 
+            fill=None, line=dict(color='#2962FF', width=1.5, shape='hv')
         ))
-        
-        # 2. 绘制上轨 (Max) - 并填充颜色
         fig.add_trace(go.Scatter(
-            x=df.index, y=line1, 
-            name='扶梯中间区', # 改名：明确这是中间区域
-            fill='tonexty', 
-            fillcolor='rgba(83, 109, 254, 0.15)',
-            line=dict(color='rgba(83, 109, 254, 0.8)', width=1.5, shape='hv'),
-            mode='lines'
+            x=df.index, y=line2, name='通道下沿', 
+            fill='tonexty', fillcolor='rgba(83, 109, 254, 0.1)',
+            line=dict(color='#00B0FF', width=1.5, shape='hv')
         ))
-        
-        # 3. 单独显式画出上沿和下沿的线，方便看清楚边界
-        fig.add_trace(go.Scatter(
-            x=df.index, y=line1, 
-            name='扶梯通道上沿 ', # 改名：明确突破这里买入
-            line=dict(color='#2962FF', width=1.5, shape='hv'), # 深蓝色
-            showlegend=True
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=df.index, y=line2, 
-            name='扶梯通道下沿 ', # 改名：明确跌破这里卖出
-            line=dict(color='#00B0FF', width=1.5, shape='hv'), # 浅蓝色
-            showlegend=True
-        ))
-        
     else:
-        # ... 双均线逻辑保持不变 ...
-        fig.add_trace(go.Scatter(x=df.index, y=line1, name='快线 (短期趋势)', line=dict(color='#2962FF', width=1.5)))
-        fig.add_trace(go.Scatter(x=df.index, y=line2, name='慢线 (长期趋势)', line=dict(color='#FF6D00', width=1.5)))
+        # 双均线绘制
+        fig.add_trace(go.Scatter(x=df.index, y=line1, name='快线', line=dict(color='#2962FF', width=1.5)))
+        fig.add_trace(go.Scatter(x=df.index, y=line2, name='慢线', line=dict(color='#FF6D00', width=1.5)))
 
-    # ... 后面绘制买卖点和盈亏线的逻辑保持不变 ...
-    
-    # (省略后续代码，直接复制之前的即可)
-    buy = df[df['Position'] == 1]
-    sell = df[df['Position'] == -1]
-    
-    fig.add_trace(go.Scatter(
-        x=buy.index, y=buy['Close'], mode='markers', 
-        marker=dict(symbol='triangle-up', size=13, color='#D50000', line=dict(width=1, color='white')), 
-        name='买入信号'
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=sell.index, y=sell['Close'], mode='markers', 
-        marker=dict(symbol='triangle-down', size=13, color='#00C853', line=dict(width=1, color='white')), 
-        name='卖出信号'
-    ))
-
-    # ... 盈亏连线代码保持不变 ...
-    for bd, brow in buy.iterrows():
-        subsequent_sells = sell[sell.index > bd]
-        if not subsequent_sells.empty:
-            sd = subsequent_sells.index[0]
-            sp = subsequent_sells.loc[sd]['Close']
-            bp = brow['Close']
-            line_color = 'rgba(213, 0, 0, 0.6)' if sp >= bp else 'rgba(0, 200, 83, 0.6)'
-            fig.add_trace(go.Scatter(
-                x=[bd, sd], y=[bp, sp], mode='lines', 
-                line=dict(color=line_color, width=2, dash='dot'), 
-                showlegend=False, hoverinfo='skip'
-            ))
+    # 买卖点
+    if 'Position' in df.columns:
+        buy = df[df['Position'] == 1]
+        sell = df[df['Position'] == -1]
+        
+        fig.add_trace(go.Scatter(
+            x=buy.index, y=buy['Close'], mode='markers', 
+            marker=dict(symbol='triangle-up', size=12, color='#D50000', line=dict(width=1, color='white')), 
+            name='买入'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=sell.index, y=sell['Close'], mode='markers', 
+            marker=dict(symbol='triangle-down', size=12, color='#00C853', line=dict(width=1, color='white')), 
+            name='卖出'
+        ))
 
     fig.update_layout(
-        title=dict(text=f"{code} - {strategy_name}", font=dict(size=20)),
+        title=dict(text=title_text, font=dict(size=18)),
         height=600, template="plotly_white", hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
     )
     return fig
 
-
-# --- 5. 主程序 ---
+# --- 6. 主程序 ---
 def main():
-    st.title("📈 ZC_金银趋势追踪")
+    st.title("📈 ZC_金银趋势追踪 Pro")
     
-    st.sidebar.header("⚙️ 策略配置")
+    # --- 侧边栏配置 ---
+    st.sidebar.header("🛠️ 全局设置")
     
-    # 资产选择配置
+    # 1. 标的选择
     ASSET_OPTIONS = {
         'AU.SHF': '黄金期货主力 (AU.SHF)',
         'AG.SHF': '白银期货主力 (AG.SHF)',
         'Au9999.SGE': '黄金现货9999 (Au9999.SGE)'
     }
-    
     target_code = st.sidebar.selectbox(
-        "选择交易标的", 
-        options=list(ASSET_OPTIONS.keys()),
-        format_func=lambda x: ASSET_OPTIONS[x],
-        index=0
+        "交易标的", options=list(ASSET_OPTIONS.keys()),
+        format_func=lambda x: ASSET_OPTIONS[x]
     )
     
-    strategy_type = st.sidebar.radio("选择策略模型", ["双均线策略 (Double MA)", "自动扶梯策略 (Escalator)"])
+    # 2. 周期切换 (日线/周线)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📅 周期选择")
+    period_mode = st.sidebar.radio(
+        "K线周期", 
+        ["日线 (Daily)", "周线 (Weekly)"], 
+        index=0,
+        horizontal=True
+    )
+    is_weekly = "周线" in period_mode
+    period_tag = "周线" if is_weekly else "日线"
 
-    # 加载数据
-    df_raw, loaded_path = load_csv_data(target_code)
+    # 3. 策略选择
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⚙️ 策略模型")
+    strategy_type = st.sidebar.radio("模型类型", ["双均线策略 (Double MA)", "自动扶梯策略 (Escalator)"])
 
+    # --- 数据处理 ---
+    df_raw, _ = load_csv_data(target_code)
+    
     if df_raw.empty:
-        st.error(f"❌ 无法找到文件: {target_code}.csv")
-        st.info("请运行 update_data.py 更新数据，或确保文件在 data 目录下。")
+        st.error(f"❌ 未找到 {target_code} 数据")
         return
-    else:
-        display_name = ASSET_OPTIONS.get(target_code, target_code)
-        st.success(f"已加载: {display_name} ({len(df_raw)} 条记录)")
 
-    # 运行策略
-    engine = StrategyEngine(df_raw)
+    # 应用周期重采样
+    df_active = resample_data(df_raw, 'W' if is_weekly else 'D')
     
+    if len(df_active) < 50:
+        st.warning(f"⚠️ 数据量不足 ({len(df_active)}行)，可能无法计算长期指标")
 
+    engine = StrategyEngine(df_active)
 
-    if "双均线" in strategy_type:
-        st.sidebar.subheader("双均线参数")
-        short_w = st.sidebar.number_input("快线周期 (短期趋势)", 5, 100, 10, help="例如：10日均线，反应灵敏")
-        long_w = st.sidebar.number_input("慢线周期 (长期趋势)", 20, 300, 50, help="例如：50日均线，反应迟钝")
-        df_res, l1, l2 = engine.run_double_ma(short_w, long_w)
-    else:
-        st.sidebar.subheader("自动扶梯参数")
-        # --- 修改点：名字更加具体 ---
-        fast_w = st.sidebar.number_input("快线周期 ", 2, 100, 10, help="决定通道对价格波动的敏感度，周期越短通道越贴近价格")
-        slow_w = st.sidebar.number_input("慢线周期 ", 10, 300, 50, help="决定通道的基础宽幅，周期越长通道越宽")
-        df_res, l1, l2 = engine.run_escalator(fast_w, slow_w)
-
-# ... 保持下面不变 ...
-
+    # --- 优化器与参数输入 ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎯 参数调优")
     
+    # 定义当前的策略函数引用，供优化器调用
+    current_strat_func = engine.run_double_ma if "双均线" in strategy_type else engine.run_escalator
+    
+    col_opt1, col_opt2 = st.sidebar.columns([3, 1])
+    with col_opt1:
+        st.info("💡 寻找信号最密集的参数组合")
+    with col_opt2:
+        if st.button("🔍"):
+            best_p, best_c = optimize_parameters(df_active, current_strat_func)
+            st.session_state.opt_short = best_p[0]
+            st.session_state.opt_long = best_p[1]
+            st.toast(f"优化完成！最佳参数: {best_p}, 信号数: {best_c}", icon="✅")
+
+    # 确定默认值（优先使用 session_state 中的优化值）
+    default_short = st.session_state.get('opt_short', 10) if st.session_state.get('opt_short') else 10
+    default_long = st.session_state.get('opt_long', 50) if st.session_state.get('opt_long') else 50
+
+    # 即使有优化值，用户也可以手动微调
+    short_w = st.sidebar.number_input("快线周期 / Window 1", 2, 200, int(default_short))
+    long_w = st.sidebar.number_input("慢线周期 / Window 2", 5, 500, int(default_long))
+    
+    # 如果用户手动修改了，清空优化状态以免下次混淆(可选)
+    # st.session_state.opt_short = None 
+
+    # --- 运行策略 ---
+    df_res, l1, l2 = current_strat_func(short_w, long_w)
+
     # --- 结果展示区 ---
     last_row = df_res.iloc[-1]
-    last_date = df_res.index[-1].strftime('%Y-%m-%d')
-    current_pos = last_row['Signal']
+    
+    # 计算一些简单的统计
+    total_signals = len(df_res[df_res['Position'] != 0])
     
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("数据日期", last_date)
-    c2.metric("最新收盘", f"{last_row['Close']:.2f}")
-    c3.metric("当前状态", "持仓 (多头)" if current_pos == 1 else "空仓 (观望)", 
-              delta="BULL" if current_pos==1 else "FLAT", delta_color="normal")
+    c1.metric("当前视图", period_tag)
+    c2.metric("最新价格", f"{last_row['Close']:.2f}")
     
-    # 收益计算
-    last_signal_idx = df_res[df_res['Position'] != 0].index
-    if not last_signal_idx.empty:
-        last_op_date = last_signal_idx[-1]
-        last_op_price = df_res.loc[last_op_date]['Close']
-        last_op_type = "买入" if df_res.loc[last_op_date]['Position'] == 1 else "卖出"
-        
-        if current_pos == 1:
-            pnl = (last_row['Close'] - last_op_price) / last_op_price * 100
-            c4.metric(f"自 {last_op_date.strftime('%m-%d')} {last_op_type}", f"{pnl:.2f}%", delta=f"{pnl:.2f}%")
-        else:
-            c4.metric("最近操作", f"{last_op_date.strftime('%m-%d')} {last_op_type}")
+    pos_val = last_row['Signal']
+    state_text = "🔴 多头持仓" if pos_val == 1 else "⚪ 空仓观望"
+    c3.metric("当前信号", state_text)
+    
+    c4.metric("区间信号总数", f"{total_signals} 次", help="该参数组合下的买卖操作总次数")
 
-    # 绘图
-    st.plotly_chart(plot_chart(df_res, target_code, l1, l2, strategy_type), use_container_width=True)
+    # 图表
+    st.plotly_chart(plot_chart(df_res, target_code, l1, l2, strategy_type, period_tag), use_container_width=True)
     
-    # 信号表
-    with st.expander("📊 查看详细信号记录"):
+    # 详细数据
+    with st.expander(f"📋 {period_tag} 详细交易记录"):
         signals = df_res[df_res['Position'] != 0].copy()
         if not signals.empty:
             signals['操作'] = signals['Position'].map({1: '🔺 买入', -1: '🔻 卖出'})
-            
-            if "扶梯" in strategy_type:
-                cols_to_show = ['Close', '操作', 'kl_max', 'kl_min', 'kl_range_cur','kl_range_pre']
-            else:
-                cols_to_show = ['Close', '操作', 'Line_Fast', 'Line_Slow']
-            
-            df_display = signals[cols_to_show].sort_index(ascending=False)
-            format_dict = {col: "{:.2f}" for col in cols_to_show if col != '操作'}
-            
-            st.dataframe(df_display.style.format(format_dict), use_container_width=True)
+            cols = ['Close', '操作', 'Line_Fast', 'Line_Slow'] if 'Line_Fast' in signals.columns else ['Close', '操作']
+            st.dataframe(
+                signals[cols].sort_index(ascending=False).style.format("{:.2f}", subset=['Close'] + [c for c in cols if 'Line' in c]),
+                use_container_width=True
+            )
         else:
-            st.write("当前区间内无交易信号")
+            st.write("当前参数下无交易信号")
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
