@@ -533,9 +533,10 @@ def main():
             display_cols.append('Drawdown')
         
         available_cols = [c for c in display_cols if c in df_res.columns]
-        st.dataframe(df_res[available_cols].tail(20), use_container_width=True)
+        st.dataframe(df_res[available_cols], use_container_width=True)
 
 if __name__ == "__main__":
     main()
+
 
 
