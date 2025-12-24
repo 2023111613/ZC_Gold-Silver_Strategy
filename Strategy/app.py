@@ -384,7 +384,7 @@ def main():
     st.title("📈 ZC_金银走势追踪")
     
     # 侧边栏配置
-    ASSET_OPTIONS = {'AU.SHF': '黄金期货', 'AG.SHF': '白银期货', 'Au9999.SGE': '黄金现货','30年国债': 'TL.CFE'}
+    ASSET_OPTIONS = {'AU.SHF': '黄金期货', 'AG.SHF': '白银期货', 'Au9999.SGE': '黄金现货','TL.CFE': '30年国债主连'}
     target_code = st.sidebar.selectbox("选择标的", options=list(ASSET_OPTIONS.keys()), 
                                         format_func=lambda x: ASSET_OPTIONS[x])
     period_mode = st.sidebar.radio("选择周期", ["日线", "周线"], horizontal=True)
@@ -537,4 +537,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
