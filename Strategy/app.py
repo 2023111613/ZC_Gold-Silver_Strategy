@@ -14,9 +14,7 @@ for key in ['opt_short', 'opt_long', 'opt_a', 'opt_b', 'opt_c', 'opt_d', 'opt_k1
         st.session_state[key] = None
 
 # --- 2. 数据加载与重采样 ---
-# ⭐ 关键修复：添加缓存装饰器，设置 TTL 为 1 小时（3600秒）
-# 这样每小时会自动重新加载数据，确保页面显示最新数据
-@st.cache_data(ttl=3600)  # 缓存1小时后自动失效
+@st.cache_data(ttl=3600)  # ⭐ 新增：缓存1小时后自动失效，确保数据更新
 def load_csv_data(code):
     target_filename = f"{code}.csv"
     found_path = None
@@ -197,113 +195,157 @@ class StrategyEngine:
         
         df['Ssetup'] = h + a * (c_prev - l)
         df['Bsetup'] = l - a * (h - c_prev)
-        df['Senter'] = (1 + b) / 2 * (h + l) - b * l
-        df['Benter'] = (1 + b) / 2 * (h + l) - b * h
-        df['Sbreak'] = df['Ssetup'] + c * (df['Ssetup'] - df['Bsetup'])
-        df['Bbreak'] = df['Bsetup'] - c * (df['Ssetup'] - df['Bsetup'])
-        df['Sbreak_adj'] = df['Sbreak'] - d * (df['High'] - df['Close'])
-        df['Bbreak_adj'] = df['Bbreak'] + d * (df['Close'] - df['Low'])
-
-        cond_buy = (df['Close'] > df['Sbreak_adj'])
-        cond_sell = (df['Close'] < df['Bbreak_adj'])
+        df['Senter'] = b / 2 * (h + l) - c * l
+        df['Benter'] = b / 2 * (h + l) - c * h
+        df['Sbreak'] = df['Ssetup'] - d * (df['Ssetup'] - df['Bsetup'])
+        df['Bbreak'] = df['Bsetup'] + d * (df['Ssetup'] - df['Bsetup'])
+        
+        cond_buy = (df['Close'] > df['Sbreak']) | ((df['Low'] < df['Bsetup']) & (df['Close'] > df['Benter']))
+        cond_sell = (df['Close'] < df['Bbreak']) | ((df['High'] > df['Ssetup']) & (df['Close'] < df['Senter']))
         
         df['Raw_Signal'] = np.select([cond_buy, cond_sell], [1, 0], default=np.nan)
         df['Signal'] = df['Raw_Signal'].ffill().fillna(0)
         df['Position'] = df['Signal'].diff()
-        return df, df['Sbreak_adj'], df['Bbreak_adj']
+        return df, df['Sbreak'], df['Bbreak']
 
     def run_dual_thrust(self, n, k1, k2):
+
         df = self.df.copy()
-        df['HH'] = df['High'].rolling(n).max()
-        df['HC'] = df['Close'].rolling(n).max()
-        df['LC'] = df['Close'].rolling(n).min()
-        df['LL'] = df['Low'].rolling(n).min()
-        df['Range'] = np.maximum(df['HH'] - df['LC'], df['HC'] - df['LL'])
-        df['Upper_Band'] = df['Open'] + k1 * df['Range'].shift(1)
-        df['Lower_Band'] = df['Open'] - k2 * df['Range'].shift(1)
+        n = int(n)
         
+        df['HH'] = df['High'].shift(1).rolling(window=n).max()  
+        df['LL'] = df['Low'].shift(1).rolling(window=n).min()   
+        df['HC'] = df['Close'].shift(1).rolling(window=n).max() 
+        df['LC'] = df['Close'].shift(1).rolling(window=n).min() 
+        
+        df['Range'] = np.maximum(df['HH'] - df['LC'], df['HC'] - df['LL'])
+
+        df['Upper_Band'] = df['Open'] + k1 * df['Range']
+        df['Lower_Band'] = df['Open'] - k2 * df['Range']
+        
+        # 生成信号
+        # 收盘价突破上轨做多，突破下轨平仓
         cond_buy = df['Close'] > df['Upper_Band']
         cond_sell = df['Close'] < df['Lower_Band']
         
         df['Raw_Signal'] = np.select([cond_buy, cond_sell], [1, 0], default=np.nan)
         df['Signal'] = df['Raw_Signal'].ffill().fillna(0)
         df['Position'] = df['Signal'].diff()
+        
         return df, df['Upper_Band'], df['Lower_Band']
 
-# --- 5. 参数优化模块 ---
+# --- 5. 优化器 ---
 def optimize_parameters(df, strategy_type, engine):
-    best_return, best_params, tested_count = -np.inf, {}, 0
-    progress_bar = st.progress(0)
+    best_count = -1
+    best_params = {}
     
+    progress_text = f"正在优化 {strategy_type} 参数..."
+    my_bar = st.sidebar.progress(0, text=progress_text)
+
     if "R-Breaker" in strategy_type:
-        a_range, b_range = np.arange(0.1, 0.61, 0.05), np.arange(0.01, 0.51, 0.04)
-        c_range, d_range = np.arange(0.05, 0.51, 0.05), np.arange(0.05, 1.01, 0.1)
-        total = len(a_range) * len(b_range) * len(c_range) * len(d_range)
-        for a in a_range:
+        a_range = np.arange(0.2, 0.5, 0.1)
+        b_range = np.arange(0.05, 0.15, 0.05)
+        c_range = np.arange(0.15, 0.35, 0.1)
+        d_range = np.arange(0.1, 0.5, 0.1)
+        total = len(a_range)
+        for i, a in enumerate(a_range):
             for b in b_range:
                 for c in c_range:
                     for d in d_range:
-                        df_res, _, _ = engine.run_r_breaker(a, b, c, d)
-                        df_res['R'] = df_res['Close'].pct_change() * df_res['Signal'].shift(1)
-                        total_r = df_res['R'].sum()
-                        if total_r > best_return:
-                            best_return, best_params = total_r, {'a': a, 'b': b, 'c': c, 'd': d}
-                        tested_count += 1
-                        progress_bar.progress(tested_count / total)
+                        res, _, _ = engine.run_r_breaker(a, b, c, d)
+                        count = len(res[res['Position'] != 0])
+                        if count > best_count:
+                            best_count = count
+                            best_params = {'a': a, 'b': b, 'c': c, 'd': d}
+            my_bar.progress((i + 1) / total)
+            
     elif "Dual Thrust" in strategy_type:
-        n_range = range(2, 15)
-        k_range = np.arange(0.1, 1.01, 0.1)
-        total = len(n_range) * len(k_range) * len(k_range)
-        for n in n_range:
-            for k1 in k_range:
-                for k2 in k_range:
-                    df_res, _, _ = engine.run_dual_thrust(n, k1, k2)
-                    df_res['R'] = df_res['Close'].pct_change() * df_res['Signal'].shift(1)
-                    total_r = df_res['R'].sum()
-                    if total_r > best_return:
-                        best_return, best_params = total_r, {'n': n, 'k1': k1, 'k2': k2}
-                    tested_count += 1
-                    progress_bar.progress(tested_count / total)
+        n_range = range(3, 15, 2)
+        k1_range = np.arange(0.3, 0.8, 0.1)
+        k2_range = np.arange(0.3, 0.8, 0.1)
+        total = len(n_range)
+        for i, n in enumerate(n_range):
+            for k1 in k1_range:
+                for k2 in k2_range:
+                    res, _, _ = engine.run_dual_thrust(n, k1, k2)
+                    count = len(res[res['Position'] != 0])
+                    if count > best_count:
+                        best_count = count
+                        best_params = {'n': n, 'k1': k1, 'k2': k2}
+            my_bar.progress((i + 1) / total)
     else:
-        short_range, long_range = range(3, 30), range(20, 120)
-        total = len(short_range) * len(long_range)
-        strat_func = engine.run_double_ma if "双均线" in strategy_type else engine.run_escalator
-        for s in short_range:
-            for l in long_range:
-                if s >= l: continue
-                df_res, _, _ = strat_func(s, l)
-                df_res['R'] = df_res['Close'].pct_change() * df_res['Signal'].shift(1)
-                total_r = df_res['R'].sum()
-                if total_r > best_return:
-                    best_return, best_params = total_r, {'short': s, 'long': l}
-                tested_count += 1
-                progress_bar.progress(min(tested_count / total, 1.0))
-    progress_bar.empty()
-    return best_params, tested_count
+        shorts = range(5, 30, 5)
+        total = len(shorts)
+        for i, s_w in enumerate(shorts):
+            for l_w in range(s_w + 10, 100, 10):
+                strat_func = engine.run_double_ma if "双均线" in strategy_type else engine.run_escalator
+                res, _, _ = strat_func(s_w, l_w)
+                count = len(res[res['Position'] != 0])
+                if count > best_count:
+                    best_count = count
+                    best_params = {'short': s_w, 'long': l_w}
+            my_bar.progress((i + 1) / total)
+            
+    my_bar.empty()
+    return best_params, best_count
 
-# --- 6. 绘图模块 ---
+# --- 6. 绘图函数 ---
 def plot_chart(df, code, line1, line2, strategy_name, period_tag, show_drawdown=False):
     if show_drawdown and 'Drawdown' in df.columns:
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                          row_heights=[0.7, 0.3], subplot_titles=[f"{code} {strategy_name} ({period_tag})", "动态回撤"])
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                           vertical_spacing=0.05, row_heights=[0.7, 0.3],
+                           subplot_titles=(f"{code} {strategy_name} ({period_tag})", "动态回撤"))
     else:
         fig = go.Figure()
     
-    # 主图
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K线'),
-                  row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
-    fig.add_trace(go.Scatter(x=df.index, y=line1, name='上轨/快线', line=dict(color='orange', width=1)),
-                  row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
-    fig.add_trace(go.Scatter(x=df.index, y=line2, name='下轨/慢线', line=dict(color='blue', width=1)),
-                  row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+    # 基础K线价格
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='价格', 
+                             line=dict(color='gray', width=1), opacity=0.4),
+                  row=1 if show_drawdown and 'Drawdown' in df.columns else None,
+                  col=1 if show_drawdown and 'Drawdown' in df.columns else None)
     
-    # 买卖信号
-    buys = df[df['Position'] == 1]
-    sells = df[df['Position'] == -1]
-    fig.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers',
+    if "R-Breaker" in strategy_name:
+        fig.add_trace(go.Scatter(x=df.index, y=df['Sbreak'], name='突破卖出线(Sbreak)', 
+                                line=dict(color='red', dash='dot')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Bbreak'], name='突破买入线(Bbreak)', 
+                                line=dict(color='green', dash='dot')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Ssetup'], name='观察卖出价', 
+                                line=dict(color='#FF6D00')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Bsetup'], name='观察买入价', 
+                                line=dict(color='#2962FF')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+    elif "Dual Thrust" in strategy_name:
+        fig.add_trace(go.Scatter(x=df.index, y=line1, name='上轨(Upper Band)', 
+                                line=dict(color='#E91E63', dash='dot')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        fig.add_trace(go.Scatter(x=df.index, y=line2, name='下轨(Lower Band)', 
+                                line=dict(color='#4CAF50', dash='dot')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        # 添加Range区域填充
+        fig.add_trace(go.Scatter(x=df.index, y=df['HH'], name='N日最高', 
+                                line=dict(color='rgba(255,152,0,0.3)', width=1)),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        fig.add_trace(go.Scatter(x=df.index, y=df['LL'], name='N日最低', 
+                                line=dict(color='rgba(33,150,243,0.3)', width=1)),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+    else:
+        fig.add_trace(go.Scatter(x=df.index, y=line1, name='快线/通道上沿', 
+                                line=dict(color='#2962FF')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+        fig.add_trace(go.Scatter(x=df.index, y=line2, name='慢线/通道下沿', 
+                                line=dict(color='#FF6D00')),
+                      row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
+
+    # 买卖信号点
+    buy = df[df['Position'] == 1]
+    sell = df[df['Position'] == -1]
+    fig.add_trace(go.Scatter(x=buy.index, y=buy['Close'], mode='markers', 
                             marker=dict(symbol='triangle-up', size=12, color='red'), name='买入信号'),
                   row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
-    fig.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers',
+    fig.add_trace(go.Scatter(x=sell.index, y=sell['Close'], mode='markers', 
                             marker=dict(symbol='triangle-down', size=12, color='green'), name='卖出信号'),
                   row=1 if show_drawdown and 'Drawdown' in df.columns else None, col=1 if show_drawdown and 'Drawdown' in df.columns else None)
     
@@ -342,8 +384,7 @@ def plot_equity_curve(df):
 def main():
     st.title("📈 ZC_金银走势追踪")
     
-    # ⭐ 新增：侧边栏显示缓存状态和手动刷新按钮
-    st.sidebar.markdown("---")
+    # ⭐ 新增：手动刷新数据按钮
     if st.sidebar.button("🔄 刷新数据"):
         st.cache_data.clear()
         st.rerun()
