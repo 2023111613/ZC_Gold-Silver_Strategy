@@ -14,7 +14,7 @@ for key in ['opt_short', 'opt_long', 'opt_a', 'opt_b', 'opt_c', 'opt_d', 'opt_k1
         st.session_state[key] = None
 
 # --- 2. 数据加载与重采样 ---
-@st.cache_data(ttl=3600)  # ⭐ 新增：缓存1小时后自动失效，确保数据更新
+@st.cache_data(ttl=3600)  # 缓存1小时后自动失效
 def load_csv_data(code):
     target_filename = f"{code}.csv"
     found_path = None
@@ -384,7 +384,7 @@ def plot_equity_curve(df):
 def main():
     st.title("📈 ZC_金银走势追踪")
     
-    # ⭐ 新增：手动刷新数据按钮
+    # ⭐ 新增：手动刷新按钮
     if st.sidebar.button("🔄 刷新数据"):
         st.cache_data.clear()
         st.rerun()
