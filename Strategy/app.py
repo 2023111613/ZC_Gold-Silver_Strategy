@@ -235,11 +235,94 @@ class StrategyEngine:
         return df, df['Upper_Band'], df['Lower_Band']
 
 # --- 5. 优化器 ---
-def optimize_parameters(df, strategy_type, engine):
-    best_count = -1
+def calculate_sharpe_ratio(df, risk_free_rate=0.03):
+    """
+    计算策略的夏普率
+    参数:
+        df: 包含Signal列的DataFrame
+        risk_free_rate: 年化无风险利率，默认3%
+    返回:
+        夏普率（年化）
+    """
+    if 'Signal' not in df.columns or len(df) < 2:
+        return -np.inf
+    
+    df = df.copy()
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
+    
+    # 去除NaN
+    strategy_returns = df['Strategy_Return'].dropna()
+    
+    if len(strategy_returns) < 2 or strategy_returns.std() == 0:
+        return -np.inf
+    
+    # 年化参数（假设252个交易日）
+    trading_days = 252
+    
+    # 计算年化收益率和年化波动率
+    mean_return = strategy_returns.mean() * trading_days
+    std_return = strategy_returns.std() * np.sqrt(trading_days)
+    
+    # 计算夏普率
+    sharpe = (mean_return - risk_free_rate) / std_return if std_return > 0 else -np.inf
+    
+    return sharpe
+
+def calculate_total_return(df):
+    """计算策略总收益率"""
+    if 'Signal' not in df.columns or len(df) < 2:
+        return -np.inf
+    
+    df = df.copy()
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
+    
+    # 计算累计收益
+    total_return = (1 + df['Strategy_Return'].fillna(0)).prod() - 1
+    return total_return * 100  # 转为百分比
+
+def calculate_max_drawdown(df):
+    """计算最大回撤（返回负值，越小越好，优化时取负）"""
+    if 'Signal' not in df.columns or len(df) < 2:
+        return -np.inf
+    
+    df = df.copy()
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
+    df['Equity'] = (1 + df['Strategy_Return'].fillna(0)).cumprod()
+    df['Peak'] = df['Equity'].cummax()
+    df['Drawdown'] = (df['Equity'] - df['Peak']) / df['Peak']
+    
+    max_dd = df['Drawdown'].min()
+    # 返回负的最大回撤，这样优化时越大越好（回撤越小越好）
+    return -max_dd * 100  # 返回正值百分比
+
+def evaluate_strategy(df, metric='sharpe'):
+    """根据指定指标评估策略"""
+    if metric == 'sharpe':
+        return calculate_sharpe_ratio(df)
+    elif metric == 'return':
+        return calculate_total_return(df)
+    elif metric == 'drawdown':
+        return calculate_max_drawdown(df)
+    elif metric == 'trade_count':
+        return len(df[df['Position'] != 0])
+    else:
+        return calculate_sharpe_ratio(df)
+
+def optimize_parameters(df, strategy_type, engine, optimize_metric='sharpe'):
+    best_score = -np.inf
     best_params = {}
     
-    progress_text = f"正在优化 {strategy_type} 参数..."
+    metric_names = {
+        'sharpe': '夏普率',
+        'return': '总收益率',
+        'drawdown': '最小回撤',
+        'trade_count': '交易次数'
+    }
+    
+    progress_text = f"正在优化 {strategy_type} 参数 (目标: {metric_names.get(optimize_metric, optimize_metric)})..."
     my_bar = st.sidebar.progress(0, text=progress_text)
 
     if "R-Breaker" in strategy_type:
@@ -253,9 +336,9 @@ def optimize_parameters(df, strategy_type, engine):
                 for c in c_range:
                     for d in d_range:
                         res, _, _ = engine.run_r_breaker(a, b, c, d)
-                        count = len(res[res['Position'] != 0])
-                        if count > best_count:
-                            best_count = count
+                        score = evaluate_strategy(res, optimize_metric)
+                        if score > best_score:
+                            best_score = score
                             best_params = {'a': a, 'b': b, 'c': c, 'd': d}
             my_bar.progress((i + 1) / total)
             
@@ -268,9 +351,9 @@ def optimize_parameters(df, strategy_type, engine):
             for k1 in k1_range:
                 for k2 in k2_range:
                     res, _, _ = engine.run_dual_thrust(n, k1, k2)
-                    count = len(res[res['Position'] != 0])
-                    if count > best_count:
-                        best_count = count
+                    score = evaluate_strategy(res, optimize_metric)
+                    if score > best_score:
+                        best_score = score
                         best_params = {'n': n, 'k1': k1, 'k2': k2}
             my_bar.progress((i + 1) / total)
     else:
@@ -280,14 +363,14 @@ def optimize_parameters(df, strategy_type, engine):
             for l_w in range(s_w + 10, 100, 10):
                 strat_func = engine.run_double_ma if "双均线" in strategy_type else engine.run_escalator
                 res, _, _ = strat_func(s_w, l_w)
-                count = len(res[res['Position'] != 0])
-                if count > best_count:
-                    best_count = count
+                score = evaluate_strategy(res, optimize_metric)
+                if score > best_score:
+                    best_score = score
                     best_params = {'short': s_w, 'long': l_w}
             my_bar.progress((i + 1) / total)
             
     my_bar.empty()
-    return best_params, best_count
+    return best_params, best_score
 
 # --- 6. 绘图函数 ---
 def plot_chart(df, code, line1, line2, strategy_name, period_tag, show_drawdown=False):
@@ -506,8 +589,24 @@ def main():
 
     # 优化按钮逻辑
     st.sidebar.markdown("---")
+    st.sidebar.subheader("🎯 参数优化")
+    
+    # 优化指标选择
+    optimize_metric = st.sidebar.selectbox(
+        "优化目标",
+        options=['sharpe', 'return', 'drawdown', 'trade_count'],
+        format_func=lambda x: {
+            'sharpe': '📈 夏普率 (风险调整收益)',
+            'return': '💰 总收益率',
+            'drawdown': '🛡️ 最小回撤',
+            'trade_count': '🔄 交易次数'
+        }.get(x, x),
+        index=0,
+        help="选择参数优化的目标指标"
+    )
+    
     if st.sidebar.button("🔍 搜索最优参数"):
-        best_p, count = optimize_parameters(df_active, strategy_type, engine)
+        best_p, best_score = optimize_parameters(df_active, strategy_type, engine, optimize_metric)
         if "R-Breaker" in strategy_type:
             st.session_state.opt_a = best_p['a']
             st.session_state.opt_b = best_p['b']
@@ -520,7 +619,15 @@ def main():
         else:
             st.session_state.opt_short = best_p['short']
             st.session_state.opt_long = best_p['long']
-        st.toast(f"参数优化完成！", icon="✅")
+        
+        # 显示优化结果
+        metric_labels = {
+            'sharpe': '夏普率',
+            'return': '总收益率(%)',
+            'drawdown': '最小回撤(%)',
+            'trade_count': '交易次数'
+        }
+        st.toast(f"优化完成！最优{metric_labels[optimize_metric]}: {best_score:.2f}", icon="✅")
 
     # 参数动态调节区
     if "R-Breaker" in strategy_type:
@@ -547,25 +654,38 @@ def main():
     # 计算权益曲线和回撤
     df_res = DrawdownCalculator.calculate_equity_curve(df_res)
     trades_df, trade_stats = DrawdownCalculator.calculate_trade_drawdowns(df_res)
+    
+    # 计算策略指标
+    current_sharpe = calculate_sharpe_ratio(df_res)
+    current_return = calculate_total_return(df_res)
 
     # 显示指标面板
     last = df_res.iloc[-1]
     
-    cols = st.columns(5)
+    # 第一行指标
+    cols = st.columns(6)
     cols[0].metric("当前最新价", f"{last['Close']:.2f}")
     
     current_status = "多头持有" if last['Signal'] == 1 else "空仓观望"
     cols[1].metric("策略状态", current_status)
     
     signal_count = len(df_res[df_res['Position'] != 0])
-    cols[2].metric("周期内交易次数", f"{signal_count} 次")
+    cols[2].metric("交易次数", f"{signal_count} 次")
     
-    # 新增：显示回撤相关指标
+    # 夏普率
+    sharpe_display = f"{current_sharpe:.2f}" if current_sharpe != -np.inf else "N/A"
+    cols[3].metric("📈 夏普率", sharpe_display)
+    
+    # 总收益率
+    return_display = f"{current_return:+.2f}%" if current_return != -np.inf else "N/A"
+    cols[4].metric("💰 总收益率", return_display)
+    
+    # 最大回撤
     if 'Drawdown' in df_res.columns:
         max_dd = df_res['Drawdown'].min()
-        cols[3].metric("最大回撤", f"{max_dd:.2f}%")
-    
-    cols[4].metric("数据最后更新", last.name.strftime('%Y-%m-%d'))
+        cols[5].metric("最大回撤", f"{max_dd:.2f}%")
+    else:
+        cols[5].metric("数据更新", last.name.strftime('%Y-%m-%d'))
 
     # 绘图
     st.plotly_chart(plot_chart(df_res, target_code, l1, l2, strategy_type, period_mode, show_drawdown), 
