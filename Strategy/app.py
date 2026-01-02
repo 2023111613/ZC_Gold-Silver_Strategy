@@ -380,6 +380,88 @@ def plot_equity_curve(df):
                      yaxis_title="净值", hovermode="x unified")
     return fig
 
+def plot_period_strategy_chart(df, start_date, end_date, code, strategy_name):
+    """绘制选定时间段内的策略走势图（归一化收益对比）"""
+    # 筛选时间段数据
+    mask = (df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))
+    df_period = df[mask].copy()
+    
+    if df_period.empty or len(df_period) < 2:
+        return None
+    
+    # 计算归一化收益（从100开始）
+    initial_price = df_period['Close'].iloc[0]
+    df_period['Price_Normalized'] = df_period['Close'] / initial_price * 100
+    
+    # 计算策略收益（考虑信号）
+    df_period['Daily_Return'] = df_period['Close'].pct_change()
+    df_period['Strategy_Daily_Return'] = df_period['Daily_Return'] * df_period['Signal'].shift(1)
+    df_period['Strategy_Normalized'] = 100 * (1 + df_period['Strategy_Daily_Return']).cumprod()
+    df_period['Strategy_Normalized'].iloc[0] = 100  # 起始点设为100
+    
+    # 创建子图
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                       vertical_spacing=0.08, row_heights=[0.7, 0.3],
+                       subplot_titles=(f"📈 {code} 策略走势对比 ({start_date} ~ {end_date})", "持仓信号"))
+    
+    # 第一行：归一化价格 vs 策略收益
+    fig.add_trace(go.Scatter(x=df_period.index, y=df_period['Price_Normalized'], 
+                            name='买入持有', line=dict(color='#9E9E9E', width=2)),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_period.index, y=df_period['Strategy_Normalized'], 
+                            name='策略收益', line=dict(color='#2196F3', width=2)),
+                  row=1, col=1)
+    
+    # 添加买卖信号点
+    buy_signals = df_period[df_period['Position'] == 1]
+    sell_signals = df_period[df_period['Position'] == -1]
+    
+    if len(buy_signals) > 0:
+        fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Strategy_Normalized'], 
+                                mode='markers', name='买入',
+                                marker=dict(symbol='triangle-up', size=12, color='red')),
+                      row=1, col=1)
+    if len(sell_signals) > 0:
+        fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['Strategy_Normalized'], 
+                                mode='markers', name='卖出',
+                                marker=dict(symbol='triangle-down', size=12, color='green')),
+                      row=1, col=1)
+    
+    # 第二行：持仓信号
+    fig.add_trace(go.Scatter(x=df_period.index, y=df_period['Signal'], 
+                            name='持仓', fill='tozeroy',
+                            line=dict(color='#4CAF50', width=1),
+                            fillcolor='rgba(76,175,80,0.3)'),
+                  row=2, col=1)
+    
+    # 计算区间统计
+    price_return = (df_period['Price_Normalized'].iloc[-1] - 100)
+    strategy_return = (df_period['Strategy_Normalized'].iloc[-1] - 100)
+    excess_return = strategy_return - price_return
+    
+    # 添加注释
+    fig.add_annotation(
+        x=0.02, y=0.98, xref="paper", yref="paper",
+        text=f"买入持有: {price_return:+.2f}%<br>策略收益: {strategy_return:+.2f}%<br>超额收益: {excess_return:+.2f}%",
+        showarrow=False, font=dict(size=12),
+        align="left", bgcolor="rgba(255,255,255,0.8)",
+        bordercolor="#CCCCCC", borderwidth=1
+    )
+    
+    fig.update_yaxes(title_text="归一化收益 (起始=100)", row=1, col=1)
+    fig.update_yaxes(title_text="持仓", tickvals=[0, 1], ticktext=['空仓', '持有'], row=2, col=1)
+    
+    fig.update_layout(height=500, template="plotly_white", hovermode="x unified",
+                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    
+    return fig, {
+        'price_return': price_return,
+        'strategy_return': strategy_return,
+        'excess_return': excess_return,
+        'trade_count': len(buy_signals) + len(sell_signals),
+        'days': len(df_period)
+    }
+
 # --- 7. 主程序 ---
 def main():
     st.title("📈 ZC_金银走势追踪")
@@ -407,6 +489,11 @@ def main():
     show_drawdown = st.sidebar.checkbox("显示动态回撤", value=True)
     show_trades = st.sidebar.checkbox("显示交易明细", value=True)
     show_equity = st.sidebar.checkbox("显示权益曲线", value=False)
+    
+    # 新增：时间段策略走势图
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📈 时间段策略走势")
+    show_period_chart = st.sidebar.checkbox("显示时间段策略走势", value=False)
 
     # 加载数据
     df_raw, path = load_csv_data(target_code)
@@ -489,6 +576,68 @@ def main():
         equity_fig = plot_equity_curve(df_res)
         if equity_fig:
             st.plotly_chart(equity_fig, use_container_width=True)
+    
+    # 显示时间段策略走势图
+    if show_period_chart:
+        st.markdown("---")
+        st.subheader("📈 时间段策略走势分析")
+        
+        # 获取数据的日期范围
+        min_date = df_res.index.min().date()
+        max_date = df_res.index.max().date()
+        
+        # 时间段选择
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            start_date = st.date_input("开始日期", 
+                                       value=max_date - pd.Timedelta(days=365),
+                                       min_value=min_date, 
+                                       max_value=max_date,
+                                       key="period_start")
+        with col_date2:
+            end_date = st.date_input("结束日期", 
+                                     value=max_date,
+                                     min_value=min_date, 
+                                     max_value=max_date,
+                                     key="period_end")
+        
+        # 快捷时间段按钮
+        quick_cols = st.columns(6)
+        quick_periods = [
+            ("近1月", 30), ("近3月", 90), ("近6月", 180),
+            ("近1年", 365), ("近2年", 730), ("全部", None)
+        ]
+        
+        for i, (label, days) in enumerate(quick_periods):
+            if quick_cols[i].button(label, key=f"quick_{label}"):
+                if days is None:
+                    start_date = min_date
+                else:
+                    start_date = max(min_date, max_date - pd.Timedelta(days=days))
+                end_date = max_date
+                st.session_state.period_start = start_date
+                st.session_state.period_end = end_date
+                st.rerun()
+        
+        # 绘制时间段图表
+        if start_date < end_date:
+            result = plot_period_strategy_chart(df_res, start_date, end_date, target_code, strategy_type)
+            if result:
+                period_fig, period_stats = result
+                
+                # 显示区间统计
+                stat_cols = st.columns(4)
+                stat_cols[0].metric("买入持有收益", f"{period_stats['price_return']:+.2f}%")
+                stat_cols[1].metric("策略收益", f"{period_stats['strategy_return']:+.2f}%",
+                                   delta=f"{period_stats['excess_return']:+.2f}%")
+                stat_cols[2].metric("区间交易次数", f"{period_stats['trade_count']} 次")
+                stat_cols[3].metric("区间天数", f"{period_stats['days']} 天")
+                
+                st.plotly_chart(period_fig, use_container_width=True)
+            else:
+                st.warning("所选时间段数据不足，请调整日期范围")
+        else:
+            st.warning("请确保开始日期早于结束日期")
 
     # 交易回撤分析面板
     if show_trades and len(trades_df) > 0:
