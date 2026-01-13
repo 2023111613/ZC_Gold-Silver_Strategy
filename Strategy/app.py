@@ -67,15 +67,15 @@ class DrawdownCalculator:
         for i, row in df.iterrows():
             if row['Position'] == 1:  # 买入信号
                 in_position = True
-                entry_price = row['Close']
+                entry_price = row['High']
                 entry_date = i
-                max_price_since_entry = row['Close']
-                min_price_since_entry = row['Close']
+                max_price_since_entry = row['High']
+                min_price_since_entry = row['High']
                 max_drawdown = 0
                 max_runup = 0
                 
             elif row['Position'] == -1 and in_position:  # 卖出信号
-                exit_price = row['Close']
+                exit_price = row['High']
                 exit_date = i
                 pnl = (exit_price - entry_price) / entry_price * 100
                 
@@ -108,7 +108,7 @@ class DrawdownCalculator:
         # 处理仍在持仓的情况
         if in_position:
             last_row = df.iloc[-1]
-            exit_price = last_row['Close']
+            exit_price = last_row['High']
             pnl = (exit_price - entry_price) / entry_price * 100
             trades.append({
                 '入场日期': entry_date,
@@ -248,7 +248,7 @@ def calculate_sharpe_ratio(df, risk_free_rate=0.03):
         return -np.inf
     
     df = df.copy()
-    df['Daily_Return'] = df['Close'].pct_change()
+    df['Daily_Return'] = df['High'].pct_change()
     df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
     
     # 去除NaN
@@ -275,7 +275,7 @@ def calculate_total_return(df):
         return -np.inf
     
     df = df.copy()
-    df['Daily_Return'] = df['Close'].pct_change()
+    df['Daily_Return'] = df['High'].pct_change()
     df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
     
     # 计算累计收益
@@ -288,7 +288,7 @@ def calculate_max_drawdown(df):
         return -np.inf
     
     df = df.copy()
-    df['Daily_Return'] = df['Close'].pct_change()
+    df['Daily_Return'] = df['High'].pct_change()
     df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
     df['Equity'] = (1 + df['Strategy_Return'].fillna(0)).cumprod()
     df['Peak'] = df['Equity'].cummax()
@@ -473,11 +473,11 @@ def plot_period_strategy_chart(df, start_date, end_date, code, strategy_name):
         return None
     
     # 计算归一化收益（从100开始）
-    initial_price = df_period['Close'].iloc[0]
-    df_period['Price_Normalized'] = df_period['Close'] / initial_price * 100
+    initial_price = df_period['High'].iloc[0]
+    df_period['Price_Normalized'] = df_period['High'] / initial_price * 100
     
     # 计算策略收益（考虑信号）
-    df_period['Daily_Return'] = df_period['Close'].pct_change()
+    df_period['Daily_Return'] = df_period['High'].pct_change()
     df_period['Strategy_Daily_Return'] = df_period['Daily_Return'] * df_period['Signal'].shift(1)
     df_period['Strategy_Normalized'] = 100 * (1 + df_period['Strategy_Daily_Return']).cumprod()
     df_period['Strategy_Normalized'].iloc[0] = 100  # 起始点设为100
@@ -812,4 +812,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
