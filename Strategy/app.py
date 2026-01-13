@@ -549,13 +549,13 @@ def plot_period_strategy_chart(df, start_date, end_date, code, strategy_name):
 def main():
     st.title("📈 ZC_金银走势追踪")
     
-    # ⭐ 新增：手动刷新按钮
+    # 手动刷新按钮
     if st.sidebar.button("🔄 刷新数据"):
         st.cache_data.clear()
         st.rerun()
     
     # 侧边栏配置
-    ASSET_OPTIONS = {'AU.SHF': '黄金期货', 'AG.SHF': '白银期货', 'Au9999.SGE': '黄金现货','TL.CFE': '30年国债主连'}
+    ASSET_OPTIONS = {'AU.SHF': '黄金期货', 'AG.SHF': '白银期货', 'Au9999.SGE': '黄金现货','TL.CFE': '30年国债主连','000905.SHF':'中证500'}
     target_code = st.sidebar.selectbox("选择标的", options=list(ASSET_OPTIONS.keys()), 
                                         format_func=lambda x: ASSET_OPTIONS[x])
     period_mode = st.sidebar.radio("选择周期", ["日线", "周线"], horizontal=True)
@@ -566,7 +566,7 @@ def main():
         "Dual Thrust 策略"
     ])
     
-    # 新增：回撤分析开关
+    # 回撤分析开关
     st.sidebar.markdown("---")
     st.sidebar.subheader("📊 回撤分析")
     show_drawdown = st.sidebar.checkbox("显示动态回撤", value=True)
@@ -812,3 +812,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
