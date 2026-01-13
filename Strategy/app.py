@@ -147,7 +147,7 @@ class DrawdownCalculator:
             return df
         
         df = df.copy()
-        df['Daily_Return'] = df['Close'].pct_change()
+        df['Daily_Return'] = df['High'].pct_change()
         df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
         df['Equity'] = initial_capital * (1 + df['Strategy_Return']).cumprod()
         
@@ -812,3 +812,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
