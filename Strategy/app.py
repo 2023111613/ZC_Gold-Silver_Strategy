@@ -596,7 +596,7 @@ def main():
         "优化目标",
         options=['sharpe', 'return', 'drawdown', 'trade_count'],
         format_func=lambda x: {
-            'sharpe': '📈 夏普率 (风险调整收益)',
+            'sharpe': '📈 夏普率 ',
             'return': '💰 总收益率',
             'drawdown': '🛡️ 最小回撤',
             'trade_count': '🔄 交易次数'
@@ -812,4 +812,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
