@@ -142,417 +142,26 @@ class DrawdownCalculator:
     
     @staticmethod
     def calculate_equity_curve(df, initial_capital=100000):
-        """计算权益曲线和动态回撤"""
+        """计算权益曲线、策略动态回撤以及标的本身回撤"""
         if 'Signal' not in df.columns:
             return df
         
         df = df.copy()
+        # --- 策略回撤计算 ---
         df['Daily_Return'] = df['High'].pct_change()
         df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
-        df['Equity'] = initial_capital * (1 + df['Strategy_Return']).cumprod()
-        
-        # 计算动态回撤
+        df['Equity'] = initial_capital * (1 + df['Strategy_Return'].fillna(0)).cumprod()
         df['Peak'] = df['Equity'].cummax()
         df['Drawdown'] = (df['Equity'] - df['Peak']) / df['Peak'] * 100
         
+        # --- 标的本身(Buy & Hold)回撤计算 ---
+        # 使用收盘价计算回撤（也可以用High/Low，这里统一用Close更平滑，或High/Low看极端回撤）
+        df['Asset_Peak'] = df['High'].cummax()
+        df['Asset_Drawdown'] = (df['High'] - df['Asset_Peak']) / df['Asset_Peak'] * 100
+        
         return df
 
-# --- 4. 回测引擎 ---
-class BacktestEngine:
-    """
-    完整的回测引擎，支持:
-    - 初始资金设置
-    - 手续费和滑点
-    - 仓位管理
-    - 详细的交易记录
-    - 多维度业绩分析
-    """
-    
-    def __init__(self, initial_capital=100000, commission_rate=0.0003, slippage=0.0001):
-        """
-        初始化回测引擎
-        参数:
-            initial_capital: 初始资金
-            commission_rate: 手续费率 (默认万3)
-            slippage: 滑点 (默认万1)
-        """
-        self.initial_capital = initial_capital
-        self.commission_rate = commission_rate
-        self.slippage = slippage
-        
-    def run_backtest(self, df, position_size=1.0):
-        """
-        运行回测
-        参数:
-            df: 包含Signal和Position列的DataFrame
-            position_size: 仓位比例 (0-1)
-        返回:
-            backtest_result: 包含所有回测结果的字典
-        """
-        if 'Signal' not in df.columns or 'Position' not in df.columns:
-            return None
-        
-        df = df.copy()
-        
-        # 初始化变量
-        capital = self.initial_capital
-        position = 0  # 当前持仓数量
-        entry_price = 0
-        trades = []
-        equity_curve = []
-        daily_returns = []
-        
-        # 逐日回测
-        for i, (date, row) in enumerate(df.iterrows()):
-            current_price = row['Close']
-            
-            # 记录每日权益
-            if position > 0:
-                current_value = capital + position * current_price
-            else:
-                current_value = capital
-            equity_curve.append({
-                'date': date,
-                'equity': current_value,
-                'capital': capital,
-                'position_value': position * current_price if position > 0 else 0
-            })
-            
-            # 计算日收益率
-            if i > 0:
-                prev_equity = equity_curve[-2]['equity']
-                daily_ret = (current_value - prev_equity) / prev_equity if prev_equity > 0 else 0
-                daily_returns.append(daily_ret)
-            
-            # 处理交易信号
-            if row['Position'] == 1 and position == 0:  # 买入信号
-                # 计算可买入数量
-                buy_price = current_price * (1 + self.slippage)
-                commission = capital * position_size * self.commission_rate
-                available_capital = capital * position_size - commission
-                position = available_capital / buy_price
-                entry_price = buy_price
-                capital = capital * (1 - position_size)
-                
-                trades.append({
-                    'type': 'BUY',
-                    'date': date,
-                    'price': buy_price,
-                    'quantity': position,
-                    'value': position * buy_price,
-                    'commission': commission,
-                    'capital_after': capital
-                })
-                
-            elif row['Position'] == -1 and position > 0:  # 卖出信号
-                sell_price = current_price * (1 - self.slippage)
-                sell_value = position * sell_price
-                commission = sell_value * self.commission_rate
-                
-                # 计算本次交易盈亏
-                pnl = (sell_price - entry_price) * position - commission
-                pnl_pct = (sell_price - entry_price) / entry_price * 100
-                
-                capital += sell_value - commission
-                
-                trades.append({
-                    'type': 'SELL',
-                    'date': date,
-                    'price': sell_price,
-                    'quantity': position,
-                    'value': sell_value,
-                    'commission': commission,
-                    'pnl': pnl,
-                    'pnl_pct': pnl_pct,
-                    'capital_after': capital
-                })
-                
-                position = 0
-                entry_price = 0
-        
-        # 如果最后还有持仓，按最后价格结算
-        if position > 0:
-            last_price = df['Close'].iloc[-1] * (1 - self.slippage)
-            sell_value = position * last_price
-            commission = sell_value * self.commission_rate
-            pnl = (last_price - entry_price) * position - commission
-            pnl_pct = (last_price - entry_price) / entry_price * 100
-            capital += sell_value - commission
-            
-            trades.append({
-                'type': 'SELL (结算)',
-                'date': df.index[-1],
-                'price': last_price,
-                'quantity': position,
-                'value': sell_value,
-                'commission': commission,
-                'pnl': pnl,
-                'pnl_pct': pnl_pct,
-                'capital_after': capital
-            })
-        
-        # 创建权益曲线DataFrame
-        equity_df = pd.DataFrame(equity_curve)
-        equity_df.set_index('date', inplace=True)
-        
-        # 计算业绩指标
-        metrics = self._calculate_metrics(equity_df, daily_returns, trades)
-        
-        # 创建交易记录DataFrame
-        trades_df = self._create_trades_df(trades)
-        
-        return {
-            'equity_df': equity_df,
-            'trades_df': trades_df,
-            'metrics': metrics,
-            'final_capital': capital,
-            'daily_returns': daily_returns
-        }
-    
-    def _calculate_metrics(self, equity_df, daily_returns, trades):
-        """计算回测业绩指标"""
-        if len(equity_df) == 0:
-            return {}
-        
-        # 基础指标
-        initial_equity = equity_df['equity'].iloc[0]
-        final_equity = equity_df['equity'].iloc[-1]
-        total_return = (final_equity - initial_equity) / initial_equity * 100
-        
-        # 计算最大回撤
-        equity_df['peak'] = equity_df['equity'].cummax()
-        equity_df['drawdown'] = (equity_df['equity'] - equity_df['peak']) / equity_df['peak'] * 100
-        max_drawdown = equity_df['drawdown'].min()
-        
-        # 找到最大回撤期间
-        max_dd_end_idx = equity_df['drawdown'].idxmin()
-        max_dd_start_idx = equity_df.loc[:max_dd_end_idx, 'equity'].idxmax()
-        
-        # 计算夏普率
-        if len(daily_returns) > 0:
-            returns_arr = np.array(daily_returns)
-            annual_return = np.mean(returns_arr) * 252
-            annual_vol = np.std(returns_arr) * np.sqrt(252)
-            sharpe = (annual_return - 0.03) / annual_vol if annual_vol > 0 else 0
-        else:
-            sharpe = 0
-            annual_return = 0
-            annual_vol = 0
-        
-        # 交易统计
-        sell_trades = [t for t in trades if t['type'].startswith('SELL')]
-        if len(sell_trades) > 0:
-            win_trades = [t for t in sell_trades if t.get('pnl', 0) > 0]
-            lose_trades = [t for t in sell_trades if t.get('pnl', 0) < 0]
-            win_rate = len(win_trades) / len(sell_trades) * 100
-            
-            avg_win = np.mean([t['pnl'] for t in win_trades]) if win_trades else 0
-            avg_lose = np.mean([t['pnl'] for t in lose_trades]) if lose_trades else 0
-            profit_factor = abs(sum([t['pnl'] for t in win_trades]) / sum([t['pnl'] for t in lose_trades])) if lose_trades and sum([t['pnl'] for t in lose_trades]) != 0 else float('inf')
-            
-            max_win = max([t.get('pnl_pct', 0) for t in sell_trades])
-            max_lose = min([t.get('pnl_pct', 0) for t in sell_trades])
-        else:
-            win_rate = 0
-            avg_win = 0
-            avg_lose = 0
-            profit_factor = 0
-            max_win = 0
-            max_lose = 0
-        
-        # 计算总手续费
-        total_commission = sum([t.get('commission', 0) for t in trades])
-        
-        # 计算Calmar比率
-        calmar = abs(annual_return / max_drawdown * 100) if max_drawdown != 0 else 0
-        
-        # 计算年化天数
-        days = (equity_df.index[-1] - equity_df.index[0]).days
-        years = days / 365 if days > 0 else 1
-        annual_return_pct = ((final_equity / initial_equity) ** (1/years) - 1) * 100 if years > 0 else total_return
-        
-        return {
-            '初始资金': initial_equity,
-            '最终资金': final_equity,
-            '总收益率(%)': round(total_return, 2),
-            '年化收益率(%)': round(annual_return_pct, 2),
-            '最大回撤(%)': round(max_drawdown, 2),
-            '最大回撤开始': max_dd_start_idx.strftime('%Y-%m-%d') if hasattr(max_dd_start_idx, 'strftime') else str(max_dd_start_idx),
-            '最大回撤结束': max_dd_end_idx.strftime('%Y-%m-%d') if hasattr(max_dd_end_idx, 'strftime') else str(max_dd_end_idx),
-            '夏普率': round(sharpe, 2),
-            'Calmar比率': round(calmar, 2),
-            '年化波动率(%)': round(annual_vol * 100, 2),
-            '交易次数': len(sell_trades),
-            '胜率(%)': round(win_rate, 2),
-            '平均盈利': round(avg_win, 2),
-            '平均亏损': round(avg_lose, 2),
-            '盈亏比': round(abs(avg_win/avg_lose), 2) if avg_lose != 0 else float('inf'),
-            '盈利因子': round(profit_factor, 2),
-            '最大单笔盈利(%)': round(max_win, 2),
-            '最大单笔亏损(%)': round(max_lose, 2),
-            '总手续费': round(total_commission, 2),
-            '回测天数': days
-        }
-    
-    def _create_trades_df(self, trades):
-        """创建交易记录DataFrame"""
-        if not trades:
-            return pd.DataFrame()
-        
-        records = []
-        buy_trade = None
-        
-        for trade in trades:
-            if trade['type'] == 'BUY':
-                buy_trade = trade
-            elif trade['type'].startswith('SELL') and buy_trade:
-                records.append({
-                    '入场日期': buy_trade['date'],
-                    '入场价格': round(buy_trade['price'], 2),
-                    '出场日期': trade['date'],
-                    '出场价格': round(trade['price'], 2),
-                    '数量': round(buy_trade['quantity'], 4),
-                    '盈亏金额': round(trade.get('pnl', 0), 2),
-                    '收益率(%)': round(trade.get('pnl_pct', 0), 2),
-                    '手续费': round(buy_trade['commission'] + trade['commission'], 2)
-                })
-                buy_trade = None
-        
-        return pd.DataFrame(records)
-
-
-def plot_backtest_result(backtest_result, benchmark_df=None):
-    """绘制回测结果图表"""
-    equity_df = backtest_result['equity_df']
-    
-    # 创建子图
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                       vertical_spacing=0.05, row_heights=[0.5, 0.25, 0.25],
-                       subplot_titles=('策略净值曲线', '回撤', '持仓价值'))
-    
-    # 第一行：净值曲线
-    fig.add_trace(go.Scatter(x=equity_df.index, y=equity_df['equity'], 
-                            name='策略净值', line=dict(color='#2196F3', width=2)),
-                  row=1, col=1)
-    
-    # 添加基准对比（如果有）
-    if benchmark_df is not None and 'Close' in benchmark_df.columns:
-        initial_price = benchmark_df['Close'].iloc[0]
-        initial_equity = equity_df['equity'].iloc[0]
-        benchmark_equity = benchmark_df['Close'] / initial_price * initial_equity
-        fig.add_trace(go.Scatter(x=benchmark_df.index, y=benchmark_equity,
-                                name='买入持有', line=dict(color='#9E9E9E', width=1, dash='dot')),
-                      row=1, col=1)
-    
-    # 峰值线
-    fig.add_trace(go.Scatter(x=equity_df.index, y=equity_df['peak'],
-                            name='历史峰值', line=dict(color='#4CAF50', width=1, dash='dash')),
-                  row=1, col=1)
-    
-    # 第二行：回撤
-    fig.add_trace(go.Scatter(x=equity_df.index, y=equity_df['drawdown'],
-                            name='回撤(%)', fill='tozeroy',
-                            line=dict(color='#F44336', width=1),
-                            fillcolor='rgba(244,67,54,0.3)'),
-                  row=2, col=1)
-    
-    # 第三行：持仓价值
-    fig.add_trace(go.Scatter(x=equity_df.index, y=equity_df['position_value'],
-                            name='持仓价值', fill='tozeroy',
-                            line=dict(color='#FF9800', width=1),
-                            fillcolor='rgba(255,152,0,0.3)'),
-                  row=3, col=1)
-    
-    fig.update_yaxes(title_text="净值", row=1, col=1)
-    fig.update_yaxes(title_text="回撤(%)", row=2, col=1)
-    fig.update_yaxes(title_text="持仓价值", row=3, col=1)
-    
-    fig.update_layout(height=700, template="plotly_white", hovermode="x unified",
-                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    
-    return fig
-
-
-def plot_monthly_returns(backtest_result):
-    """绘制月度收益热力图"""
-    equity_df = backtest_result['equity_df']
-    
-    # 计算月度收益
-    monthly_equity = equity_df['equity'].resample('ME').last()
-    monthly_returns = monthly_equity.pct_change() * 100
-    
-    # 创建年月矩阵
-    returns_matrix = []
-    years = monthly_returns.index.year.unique()
-    months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
-    
-    for year in years:
-        year_returns = []
-        for month in range(1, 13):
-            try:
-                ret = monthly_returns[(monthly_returns.index.year == year) & 
-                                      (monthly_returns.index.month == month)]
-                year_returns.append(ret.values[0] if len(ret) > 0 else None)
-            except:
-                year_returns.append(None)
-        returns_matrix.append(year_returns)
-    
-    # 创建热力图
-    fig = go.Figure(data=go.Heatmap(
-        z=returns_matrix,
-        x=months,
-        y=[str(y) for y in years],
-        colorscale='RdYlGn',
-        zmid=0,
-        text=[[f'{v:.1f}%' if v is not None else '' for v in row] for row in returns_matrix],
-        texttemplate='%{text}',
-        textfont={"size": 10},
-        hovertemplate='%{y}年%{x}: %{z:.2f}%<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='月度收益热力图',
-        height=max(300, len(years) * 40 + 100),
-        template="plotly_white"
-    )
-    
-    return fig
-
-
-def plot_trade_distribution(trades_df):
-    """绘制交易收益分布图"""
-    if trades_df.empty or '收益率(%)' not in trades_df.columns:
-        return None
-    
-    returns = trades_df['收益率(%)']
-    
-    fig = make_subplots(rows=1, cols=2, subplot_titles=('收益率分布', '累计盈亏'))
-    
-    # 收益率直方图
-    fig.add_trace(go.Histogram(x=returns, nbinsx=20, name='收益分布',
-                               marker_color='#2196F3'), row=1, col=1)
-    
-    # 添加零线
-    fig.add_vline(x=0, line_dash="dash", line_color="red", row=1, col=1)
-    
-    # 累计盈亏
-    cumulative_pnl = trades_df['盈亏金额'].cumsum()
-    fig.add_trace(go.Scatter(x=list(range(1, len(cumulative_pnl)+1)), y=cumulative_pnl,
-                            mode='lines+markers', name='累计盈亏',
-                            line=dict(color='#4CAF50', width=2)), row=1, col=2)
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=2)
-    
-    fig.update_xaxes(title_text="收益率(%)", row=1, col=1)
-    fig.update_xaxes(title_text="交易序号", row=1, col=2)
-    fig.update_yaxes(title_text="频数", row=1, col=1)
-    fig.update_yaxes(title_text="累计盈亏", row=1, col=2)
-    
-    fig.update_layout(height=400, template="plotly_white", showlegend=False)
-    
-    return fig
-
-
-# --- 5. 策略逻辑引擎 ---
+# --- 4. 策略逻辑引擎 ---
 class StrategyEngine:
     def __init__(self, df):
         self.df = df.copy()
@@ -772,10 +381,9 @@ def plot_chart(df, code, line1, line2, strategy_name, period_tag, show_drawdown=
     if show_drawdown and 'Drawdown' in df.columns:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                            vertical_spacing=0.05, row_heights=[0.7, 0.3],
-                           subplot_titles=(f"{code} {strategy_name} ({period_tag})", "动态回撤"))
+                           subplot_titles=(f"{code} {strategy_name} ({period_tag})", "动态回撤对比 (策略 vs 标的)"))
     else:
         fig = go.Figure()
-    
     # 基础K线价格
     fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='价格', 
                              line=dict(color='gray', width=1), opacity=0.4),
@@ -829,10 +437,16 @@ def plot_chart(df, code, line1, line2, strategy_name, period_tag, show_drawdown=
     
     # 添加回撤图
     if show_drawdown and 'Drawdown' in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df['Drawdown'], name='回撤(%)', 
-                                fill='tozeroy', line=dict(color='#F44336', width=1),
+        # 策略回撤（红色填充）
+        fig.add_trace(go.Scatter(x=df.index, y=df['Drawdown'], name='策略回撤(%)', 
+                                fill='tozeroy', line=dict(color='#F44336', width=1.5),
                                 fillcolor='rgba(244,67,54,0.3)'),
                       row=2, col=1)
+        # 标的资产回撤（蓝色线条）
+        if 'Asset_Drawdown' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['Asset_Drawdown'], name='标的回撤(%)', 
+                                    line=dict(color='#2196F3', width=1.5, dash='dot')),
+                          row=2, col=1)
         fig.update_yaxes(title_text="回撤(%)", row=2, col=1)
     
     if show_drawdown and 'Drawdown' in df.columns:
@@ -972,40 +586,6 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("📈 时间段策略走势")
     show_period_chart = st.sidebar.checkbox("显示时间段策略走势", value=False)
-    
-    # 新增：策略回测功能
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🔬 策略回测")
-    show_backtest = st.sidebar.checkbox("启用完整回测", value=False, 
-                                        help="开启后将显示完整的回测分析面板")
-    
-    if show_backtest:
-        bt_initial_capital = st.sidebar.number_input("初始资金", 
-                                                     min_value=10000, 
-                                                     max_value=10000000, 
-                                                     value=100000,
-                                                     step=10000,
-                                                     help="回测初始资金")
-        bt_commission = st.sidebar.slider("手续费率 (‱)", 
-                                          min_value=0, 
-                                          max_value=50, 
-                                          value=3,
-                                          help="万分之几") / 10000
-        bt_slippage = st.sidebar.slider("滑点 (‱)", 
-                                        min_value=0, 
-                                        max_value=20, 
-                                        value=1,
-                                        help="万分之几") / 10000
-        bt_position_size = st.sidebar.slider("仓位比例 (%)", 
-                                             min_value=10, 
-                                             max_value=100, 
-                                             value=100,
-                                             help="每次交易使用的资金比例") / 100
-    else:
-        bt_initial_capital = 100000
-        bt_commission = 0.0003
-        bt_slippage = 0.0001
-        bt_position_size = 1.0
 
     # 加载数据
     df_raw, path = load_csv_data(target_code)
@@ -1227,151 +807,6 @@ def main():
                 file_name=f"{target_code}_{strategy_type}_trades.csv",
                 mime="text/csv"
             )
-
-    # 完整回测分析面板
-    if show_backtest:
-        st.markdown("---")
-        st.subheader("🔬 策略回测分析")
-        
-        # 创建回测引擎并运行回测
-        bt_engine = BacktestEngine(
-            initial_capital=bt_initial_capital,
-            commission_rate=bt_commission,
-            slippage=bt_slippage
-        )
-        
-        backtest_result = bt_engine.run_backtest(df_res, position_size=bt_position_size)
-        
-        if backtest_result:
-            metrics = backtest_result['metrics']
-            bt_trades_df = backtest_result['trades_df']
-            
-            # 回测参数概览
-            with st.expander("📋 回测参数", expanded=False):
-                param_cols = st.columns(4)
-                param_cols[0].info(f"初始资金: ¥{bt_initial_capital:,.0f}")
-                param_cols[1].info(f"手续费率: {bt_commission*10000:.1f}‱")
-                param_cols[2].info(f"滑点: {bt_slippage*10000:.1f}‱")
-                param_cols[3].info(f"仓位比例: {bt_position_size*100:.0f}%")
-            
-            # 核心指标面板
-            st.markdown("### 📊 核心业绩指标")
-            
-            # 第一行：收益指标
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("💰 总收益率", f"{metrics.get('总收益率(%)', 0):+.2f}%",
-                       delta=f"年化 {metrics.get('年化收益率(%)', 0):+.2f}%")
-            col2.metric("📈 最终资金", f"¥{metrics.get('最终资金', 0):,.2f}",
-                       delta=f"¥{metrics.get('最终资金', 0) - metrics.get('初始资金', 0):+,.2f}")
-            col3.metric("🎯 夏普率", f"{metrics.get('夏普率', 0):.2f}")
-            col4.metric("📉 最大回撤", f"{metrics.get('最大回撤(%)', 0):.2f}%")
-            
-            # 第二行：交易指标
-            col5, col6, col7, col8 = st.columns(4)
-            col5.metric("🔄 交易次数", f"{metrics.get('交易次数', 0)} 次")
-            col6.metric("🎲 胜率", f"{metrics.get('胜率(%)', 0):.1f}%")
-            col7.metric("💹 盈亏比", f"{metrics.get('盈亏比', 0):.2f}")
-            col8.metric("📊 盈利因子", f"{metrics.get('盈利因子', 0):.2f}")
-            
-            # 第三行：风险指标
-            col9, col10, col11, col12 = st.columns(4)
-            col9.metric("📊 年化波动率", f"{metrics.get('年化波动率(%)', 0):.2f}%")
-            col10.metric("⚖️ Calmar比率", f"{metrics.get('Calmar比率', 0):.2f}")
-            col11.metric("💵 总手续费", f"¥{metrics.get('总手续费', 0):,.2f}")
-            col12.metric("📅 回测天数", f"{metrics.get('回测天数', 0)} 天")
-            
-            # 最大回撤区间信息
-            st.info(f"📌 最大回撤区间: {metrics.get('最大回撤开始', 'N/A')} ~ {metrics.get('最大回撤结束', 'N/A')}")
-            
-            # 回测图表
-            st.markdown("### 📈 净值曲线与回撤")
-            bt_fig = plot_backtest_result(backtest_result, df_res)
-            st.plotly_chart(bt_fig, use_container_width=True)
-            
-            # 月度收益热力图
-            st.markdown("### 🗓️ 月度收益分析")
-            try:
-                monthly_fig = plot_monthly_returns(backtest_result)
-                st.plotly_chart(monthly_fig, use_container_width=True)
-            except Exception as e:
-                st.warning(f"月度收益图表生成失败: {e}")
-            
-            # 交易分布分析
-            if len(bt_trades_df) > 0:
-                st.markdown("### 📊 交易分布分析")
-                trade_dist_fig = plot_trade_distribution(bt_trades_df)
-                if trade_dist_fig:
-                    st.plotly_chart(trade_dist_fig, use_container_width=True)
-                
-                # 详细交易记录
-                st.markdown("### 📋 详细交易记录")
-                
-                # 添加筛选功能
-                filter_col1, filter_col2 = st.columns(2)
-                with filter_col1:
-                    show_win_only = st.checkbox("仅显示盈利交易", key="bt_win_filter")
-                with filter_col2:
-                    show_lose_only = st.checkbox("仅显示亏损交易", key="bt_lose_filter")
-                
-                display_bt_trades = bt_trades_df.copy()
-                if show_win_only:
-                    display_bt_trades = display_bt_trades[display_bt_trades['收益率(%)'] > 0]
-                if show_lose_only:
-                    display_bt_trades = display_bt_trades[display_bt_trades['收益率(%)'] < 0]
-                
-                # 显示表格
-                def highlight_bt_pnl(val):
-                    if isinstance(val, (int, float)):
-                        color = 'color: green' if val > 0 else 'color: red' if val < 0 else ''
-                        return color
-                    return ''
-                
-                if len(display_bt_trades) > 0:
-                    st.dataframe(
-                        display_bt_trades.style.applymap(highlight_bt_pnl, subset=['收益率(%)', '盈亏金额']),
-                        use_container_width=True,
-                        height=400
-                    )
-                    
-                    # 下载回测结果
-                    st.markdown("### 📥 导出回测结果")
-                    dl_col1, dl_col2 = st.columns(2)
-                    
-                    with dl_col1:
-                        csv_trades = bt_trades_df.to_csv(index=False).encode('utf-8-sig')
-                        st.download_button(
-                            label="📥 下载交易记录 (CSV)",
-                            data=csv_trades,
-                            file_name=f"{target_code}_{strategy_type}_backtest_trades.csv",
-                            mime="text/csv"
-                        )
-                    
-                    with dl_col2:
-                        # 导出完整回测报告
-                        report_data = {
-                            '回测参数': {
-                                '标的': target_code,
-                                '策略': strategy_type,
-                                '周期': period_mode,
-                                '初始资金': bt_initial_capital,
-                                '手续费率': f"{bt_commission*10000}‱",
-                                '滑点': f"{bt_slippage*10000}‱",
-                                '仓位比例': f"{bt_position_size*100}%"
-                            },
-                            '业绩指标': metrics
-                        }
-                        import json
-                        report_json = json.dumps(report_data, ensure_ascii=False, indent=2, default=str)
-                        st.download_button(
-                            label="📥 下载回测报告 (JSON)",
-                            data=report_json.encode('utf-8'),
-                            file_name=f"{target_code}_{strategy_type}_backtest_report.json",
-                            mime="application/json"
-                        )
-                else:
-                    st.info("没有符合筛选条件的交易记录")
-        else:
-            st.error("回测执行失败，请检查数据是否完整")
 
     # 数据预览
     with st.expander("查看原始信号数据"):
