@@ -153,11 +153,9 @@ class DrawdownCalculator:
         df['Equity'] = initial_capital * (1 + df['Strategy_Return'].fillna(0)).cumprod()
         df['Peak'] = df['Equity'].cummax()
         df['Drawdown'] = (df['Equity'] - df['Peak']) / df['Peak'] * 100
-        
-        # --- 标的本身(Buy & Hold)回撤计算 ---
-        # 使用收盘价计算回撤（也可以用High/Low，这里统一用Close更平滑，或High/Low看极端回撤）
+
         df['Asset_Peak'] = df['High'].cummax()
-        df['Asset_Drawdown'] = (df['High'] - df['Asset_Peak']) / df['Asset_Peak'] * 100
+        df['Asset_Drawdown'] = (df['Low'] - df['Asset_Peak']) / df['Asset_Peak'] * 100
         
         return df
 
@@ -821,3 +819,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
