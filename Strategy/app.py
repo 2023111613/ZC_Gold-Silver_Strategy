@@ -562,7 +562,7 @@ def main():
         st.rerun()
     
     # 侧边栏配置
-    ASSET_OPTIONS = {'AU.SHF': '黄金期货', 'AG.SHF': '白银期货', 'Au9999.SGE': '黄金现货','TL.CFE': '30年国债主连','000905.SHF':'中证500','932000.CSV':'中证2000'}
+    ASSET_OPTIONS = {'AU.SHF': '黄金期货', 'AG.SHF': '白银期货', 'Au9999.SGE': '黄金现货','TL.CFE': '30年国债主连','000905.SHF':'中证500','932000.CSI':'中证2000'}
     target_code = st.sidebar.selectbox("选择标的", options=list(ASSET_OPTIONS.keys()), 
                                         format_func=lambda x: ASSET_OPTIONS[x])
     period_mode = st.sidebar.radio("选择周期", ["日线", "周线"], horizontal=True)
@@ -819,6 +819,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
