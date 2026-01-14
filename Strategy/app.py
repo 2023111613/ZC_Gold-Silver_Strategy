@@ -443,7 +443,7 @@ def plot_chart(df, code, line1, line2, strategy_name, period_tag, show_drawdown=
         # 标的资产回撤（蓝色线条）
         if 'Asset_Drawdown' in df.columns:
             fig.add_trace(go.Scatter(x=df.index, y=df['Asset_Drawdown'], name='标的回撤(%)', 
-                                    line=dict(color='#2196F3', width=1.5, dash='dot')),
+                                    line=dict(color='#2196F3', width=2, dash='dot')),
                           row=2, col=1)
         fig.update_yaxes(title_text="回撤(%)", row=2, col=1)
     
@@ -819,4 +819,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
