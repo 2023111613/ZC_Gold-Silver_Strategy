@@ -792,7 +792,7 @@ def main():
                 return ''
             
             st.dataframe(
-                display_df.style.applymap(highlight_pnl, subset=['收益率(%)']),
+                display_df.style.map(highlight_pnl, subset=['收益率(%)']),
                 use_container_width=True,
                 height=300
             )
